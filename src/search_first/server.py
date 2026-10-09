@@ -157,7 +157,13 @@ def main() -> None:
     parser.add_argument(
         "--use-gh-token",
         action="store_true",
-        help="Opt in to gh auth token fallback when GITHUB_TOKEN is absent",
+        help="Opt in to gh auth token fallback when GITHUB_TOKEN and GH_TOKEN are absent",
+    )
+    parser.add_argument(
+        "--call-timeout",
+        type=float,
+        default=45,
+        help="Total seconds per tool call, including pacing and all reads (default 45; 1-120)",
     )
     parser.add_argument(
         "--cache-dir",
@@ -204,6 +210,8 @@ def main() -> None:
         parser.error(str(e))
     if not 1 <= args.port <= 65535 or not 0 <= args.cache_ttl <= 3600:
         parser.error("port must be 1 to 65535 and cache-ttl must be 0 to 3600")
+    if not 1 <= args.call_timeout <= 120:
+        parser.error("call-timeout must be 1 to 120 seconds")
     token = os.environ.get(AUTH_ENV, "").strip()
     if token and len(token) < 16:
         parser.error(f"{AUTH_ENV} must be at least 16 characters")
@@ -219,7 +227,7 @@ def main() -> None:
         )
     cache = DiskCache(args.cache_dir, args.cache_ttl)
     cache.prune()
-    github = GitHubClient(discover_token(args.use_gh_token), cache)
+    github = GitHubClient(discover_token(args.use_gh_token), cache, call_timeout=args.call_timeout)
     server = create_server(
         Discovery(github, rank_weights=rank_weights, overall_weights=overall_weights)
     )

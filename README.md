@@ -82,20 +82,72 @@ in place of `.` (quote it in PowerShell too); see "Proof and development" below.
 The server does **not** call a model or require model credentials. Your calling agent
 provides query variants, judges functional fit, and controls any subsequent work.
 
-Optional GitHub authentication:
+### GitHub limits and optional authentication
 
-- Set `GITHUB_TOKEN` in the launching process, preferably with public read access
-  only. Never put a token in tracked configuration, command arguments or examples.
-- Or explicitly opt in to existing CLI credentials: `search-first --use-gh-token`.
-  `GITHUB_TOKEN` takes precedence. The CLI fallback is off by default.
-- Without either, GitHub's unauthenticated search quota is smaller. On a rate limit,
-  the server stops further variants and returns a retry interval and incomplete
-  evidence. Retry later; do not treat an empty partial search as permission to build.
+The server reads `GITHUB_TOKEN`, then `GH_TOKEN`, from its process environment.
+If neither is set, `--use-gh-token` explicitly opts in to `gh auth token`;
+the CLI fallback is off by default. Credentials are never included in tool responses,
+logs or cache files. Never pass a token as a command argument or put its value in
+tracked configuration.
+
+GitHub's [repository search limits](https://docs.github.com/en/rest/search/search#rate-limit)
+are about **10 requests/minute per IP without authentication** and **30/minute with
+authentication**. Other users sharing an IP or account spend the same budget.
+[Core REST limits](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api)
+are **60/hour per IP** unauthenticated and generally **5,000/hour per authenticated user**;
+GitHub Actions tokens and some app/enterprise credentials have different limits.
+Secondary limits can also apply.
+
+An uncached `search_existing` costs one search request per executed variant:
+normally your 2–6 distinct variants plus one derived variant (up to 7); with fewer
+variants the planner fills in extra queries (up to 5 total). The returned `queries`
+shows the plan. `inspect_repo` costs up to **6 core requests**, and
+`compare_candidates` up to **6 per unique repo** (maximum 36). Cache hits cost zero;
+failures, quota limits and the deadline may stop a call early. Try two precise
+variants to conserve quota.
+
+Uncached search requests are paced at least 6.1 seconds apart without a token,
+or 2.1 seconds with one. GitHub quota/reset and `Retry-After` headers trigger a
+cooldown; the server returns **partial results**, a clear error and
+`retry_after_seconds` rather than waiting a full rate-limit window. Retry after that
+interval. A total **45-second deadline per tool call** includes all variants,
+inspections, queueing and pacing; individual requests are also bounded at 20 seconds.
+Use `--call-timeout SECONDS` (1–120) to change the total. Timeout results are
+incomplete: narrow the query and retry; never treat them as proof that nothing exists.
+
+To create a minimal token, open GitHub Settings → Developer settings → Personal
+access tokens → Fine-grained tokens → Generate new token. Set an expiration, choose
+**Public repositories** for repository access, and leave optional permissions unset.
+Fine-grained tokens include read-only public access; they use permissions, not
+classic token scopes. These public endpoints need no extra permissions. See
+[GitHub's token guide](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens).
+Supply the token through your secret manager or the launching process environment.
+
+Claude Code supports environment expansion in `.mcp.json`. This `env` block stores
+only a reference, never the token's value (the variable must be set before launching):
+
+```json
+{
+  "mcpServers": {
+    "search-first": {
+      "command": "uvx",
+      "args": ["--python", "3.12", "--from", "/absolute/path/search-first", "search-first"],
+      "env": {"GITHUB_TOKEN": "${GITHUB_TOKEN}"}
+    }
+  }
+}
+```
+
+Other clients may not expand `${GITHUB_TOKEN}`; consult their documentation and
+prefer inherited environment or a secret manager instead of writing the value to disk.
 
 Only public repositories are returned; inspecting private metadata is refused.
 GitHub receives your search terms. Do not include confidential requirements or secrets.
 Cache defaults to `$XDG_CACHE_HOME/search-first` (or `~/.cache/search-first`) for
-five minutes; `--cache-dir PATH` changes it and `--cache-ttl 0` disables it. The
+five minutes; `--cache-dir PATH` changes it and `--cache-ttl 0` disables it.
+Queries already cached within that TTL can answer **offline**; uncached endpoints
+still need network access. On Windows the cache is memory-only for the running
+server's lifetime because POSIX ownership/mode checks are unavailable. The
 cache directory is created with mode 0700 and cache files are written 0600; an existing
 directory that you do not own, or that others can write to, is not used. Cache entries contain public response data, not authentication headers. Known credentials
 and recognizable GitHub tokens are scrubbed, including decoded README text. Expired

@@ -15,6 +15,12 @@ def isolated(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    # Fake HTTP tests spend no wall-clock time on pacing; dedicated tests restore it.
+    from search_first.github import GitHubClient
+
+    monkeypatch.setattr(GitHubClient, "SEARCH_INTERVAL_UNAUTH", 0)
+    monkeypatch.setattr(GitHubClient, "SEARCH_INTERVAL_AUTH", 0)
     original = socket.socket.connect
 
     def connect(sock, address):
@@ -27,7 +33,7 @@ def isolated(monkeypatch, tmp_path):
 
 @pytest.fixture
 def recording():
-    return json.loads((Path(__file__).parent / "fixtures/github.json").read_text())
+    return json.loads((Path(__file__).parent / "fixtures/github.json").read_text(encoding="utf-8"))
 
 
 @pytest.fixture

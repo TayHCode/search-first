@@ -134,6 +134,21 @@ class Discovery:
         limit: int = 15,
         sort_by: str = "relevance",
     ) -> dict[str, Any]:
+        with self.github.call_budget():
+            return await self._search_existing(
+                idea, queries, language, min_stars, include_archived, limit, sort_by
+            )
+
+    async def _search_existing(
+        self,
+        idea: str,
+        queries: list[str] | None = None,
+        language: str | None = None,
+        min_stars: int = 0,
+        include_archived: bool = False,
+        limit: int = 15,
+        sort_by: str = "relevance",
+    ) -> dict[str, Any]:
         if not 1 <= limit <= 50 or min_stars < 0:
             raise ValueError("limit must be 1 to 50 and min_stars must be nonnegative")
         if sort_by not in SEARCH_SORTS:
@@ -174,7 +189,7 @@ class Discovery:
                     matches.setdefault(key, []).append({**variant, "rank": index})
             except GitHubError as e:
                 errors.append({"query": variant["query"], **e.as_dict()})
-                if e.retry_after or e.status in (401, 403):
+                if e.retry_after or e.status in (401, 403, 408):
                     break  # Stop politely; don't hammer remaining variants with the same error.
         ranked = sorted(
             [
@@ -204,6 +219,7 @@ class Discovery:
             "unique_candidates_evaluated": len(ranked),
             "queries": plan,
             "errors": errors,
+            "message": "Partial results: " + errors[-1]["message"] if errors else None,
             "coverage": {
                 "bounded": True,
                 "truncated": truncated,
@@ -215,6 +231,10 @@ class Discovery:
         }
 
     async def inspect_repo(self, repo: str) -> dict[str, Any]:
+        with self.github.call_budget():
+            return await self._inspect_repo(repo)
+
+    async def _inspect_repo(self, repo: str) -> dict[str, Any]:
         name = parse_repo(repo)
         metadata = await self.github.get(f"/repos/{name}")
         summary = repo_summary(metadata)
@@ -352,6 +372,12 @@ class Discovery:
     async def compare_candidates(
         self, idea: str, repos: list[str], sort_by: str = "overall"
     ) -> dict[str, Any]:
+        with self.github.call_budget():
+            return await self._compare_candidates(idea, repos, sort_by)
+
+    async def _compare_candidates(
+        self, idea: str, repos: list[str], sort_by: str = "overall"
+    ) -> dict[str, Any]:
         if not idea.strip() or len(idea) > 2000 or not 1 <= len(repos) <= 6:
             raise ValueError("Provide an idea (1 to 2000 characters) and 1 to 6 repos")
         if sort_by not in COMPARE_SORTS:
@@ -405,6 +431,8 @@ class Discovery:
                 )
             except GitHubError as e:
                 errors.append({"repo": name, **e.as_dict()})
+                if e.status == 408:
+                    break
         keys = {
             "overall": lambda r: (-r["overall_score"], r["name"]),
             "relevance": lambda r: (-r["relevance_score"], r["name"]),

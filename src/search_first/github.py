@@ -6,11 +6,15 @@ import asyncio
 import base64
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
 import tempfile
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager, suppress
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, TypeVar, cast
 
@@ -37,7 +41,7 @@ class GitHubError(Exception):
 
 
 def discover_token(use_gh: bool = False) -> str | None:
-    token = os.environ.get("GITHUB_TOKEN", "").strip()
+    token = os.environ.get("GITHUB_TOKEN", "").strip() or os.environ.get("GH_TOKEN", "").strip()
     if token:
         return token
     if use_gh:
@@ -67,7 +71,7 @@ def sanitize(value: T, token: str | None = None) -> T:
     if isinstance(value, list):
         return cast(T, [sanitize(v, token) for v in value])
     if isinstance(value, dict):
-        return cast(T, {str(k): sanitize(v, token) for k, v in value.items()})
+        return cast(T, {sanitize(str(k), token): sanitize(v, token) for k, v in value.items()})
     return value
 
 
@@ -76,9 +80,12 @@ class DiskCache:
         self.directory = directory
         self.ttl = ttl
         self.writes = 0
+        self._memory: dict[Path, tuple[float, Any]] = {}
 
     def is_safe(self) -> bool:
         """An existing cache folder must belong to us and not be group/world writable."""
+        if not hasattr(os, "getuid"):
+            return False  # Windows stat modes cannot establish POSIX ownership/permissions.
         try:
             info = self.directory.stat()
         except FileNotFoundError:
@@ -89,6 +96,9 @@ class DiskCache:
 
     def prune(self) -> None:
         """Delete expired entries so the cache directory cannot grow without bound."""
+        self._memory = {
+            key: entry for key, entry in self._memory.items() if time.time() - entry[0] < self.ttl
+        }
         if self.ttl <= 0 or not self.is_safe():
             return
         try:
@@ -99,7 +109,7 @@ class DiskCache:
             try:
                 if file.is_symlink() or not re.fullmatch(r"[0-9a-f]{64}\.json", file.name):
                     continue
-                entry = json.loads(file.read_text())
+                entry = json.loads(file.read_text(encoding="utf-8"))
                 if (
                     not isinstance(entry, dict)
                     or set(entry) != {"created", "data"}
@@ -116,10 +126,13 @@ class DiskCache:
         return self.directory / (hashlib.sha256(key).hexdigest() + ".json")
 
     def get(self, endpoint: str, params: dict[str, Any]) -> Any:
+        if self.ttl > 0 and not hasattr(os, "getuid"):
+            entry = self._memory.get(self.path(endpoint, params))
+            return entry[1] if entry and 0 <= time.time() - entry[0] < self.ttl else None
         if self.ttl <= 0 or not self.is_safe():
             return None
         try:
-            entry = json.loads(self.path(endpoint, params).read_text())
+            entry = json.loads(self.path(endpoint, params).read_text(encoding="utf-8"))
             if 0 <= time.time() - entry["created"] < self.ttl:
                 return entry["data"]
         except (OSError, ValueError, KeyError, TypeError):
@@ -127,6 +140,10 @@ class DiskCache:
         return None
 
     def put(self, endpoint: str, params: dict[str, Any], data: Any) -> None:
+        if self.ttl > 0 and not hasattr(os, "getuid"):
+            self.prune()
+            self._memory[self.path(endpoint, params)] = (time.time(), data)
+            return
         if self.ttl <= 0 or not self.is_safe():
             return
         self.writes += 1
@@ -134,7 +151,9 @@ class DiskCache:
             self.prune()
         try:
             self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-            with tempfile.NamedTemporaryFile(mode="w", dir=self.directory, delete=False) as f:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=self.directory, delete=False
+            ) as f:
                 json.dump({"created": time.time(), "data": data}, f)
                 temporary = Path(f.name)
             temporary.replace(self.path(endpoint, params))
@@ -144,19 +163,66 @@ class DiskCache:
 
 
 class GitHubClient:
+    SEARCH_INTERVAL_UNAUTH = 6.1
+    SEARCH_INTERVAL_AUTH = 2.1
+
     def __init__(
         self,
         token: str | None = None,
         cache: DiskCache | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
+        call_timeout: float = 45,
     ):
         self.token = token
         self.cache = cache
         self.transport = transport
+        self.call_timeout = call_timeout
+        self._deadline: ContextVar[float | None] = ContextVar("github_deadline", default=None)
+        self._search_lock = asyncio.Lock()
+        self._next_search = 0.0
+        self.rate_limits: dict[str, dict[str, int]] = {}
         self.cooldown: dict[str, float] = {}
         self._slots = asyncio.Semaphore(3)  # bounded parallel reads, no global serialization
 
+    @contextmanager
+    def call_budget(self) -> Iterator[None]:
+        """Nested inspections share the outer tool call's deadline."""
+        deadline = self._deadline.get()
+        marker = self._deadline.set(
+            deadline if deadline is not None else time.monotonic() + self.call_timeout
+        )
+        try:
+            yield
+        finally:
+            self._deadline.reset(marker)
+
     async def get(self, endpoint: str, params: dict[str, Any] | None = None) -> Any:
+        deadline = self._deadline.get()
+        remaining = deadline - time.monotonic() if deadline is not None else 20.0
+        try:
+            # Includes queueing, pacing, connection, response and slow body reads.
+            async with asyncio.timeout(min(20.0, max(0, remaining))):
+                return await self._get(endpoint, params)
+        except TimeoutError:
+            # Event-loop timers may fire one clock tick early (notably on Windows).
+            total = deadline is not None and remaining <= 20.0
+            message = (
+                f"Search-first total tool-call timeout ({self.call_timeout:g}s); "
+                "returning partial results. Narrow queries and retry."
+                if total
+                else "GitHub request timed out (20s); returning partial results. Retry later."
+            )
+            raise GitHubError(message, status=408) from None
+
+    async def _pace_search(self) -> None:
+        async with self._search_lock:
+            delay = self._next_search - time.monotonic()
+            if delay > 0:
+                await asyncio.sleep(delay)
+            interval = self.SEARCH_INTERVAL_AUTH if self.token else self.SEARCH_INTERVAL_UNAUTH
+            self._next_search = time.monotonic() + interval
+
+    async def _get(self, endpoint: str, params: dict[str, Any] | None = None) -> Any:
         if not re.fullmatch(
             r"/(?:search/repositories|repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
             r"(?:/(?:readme|commits|pulls|releases))?)",
@@ -172,10 +238,20 @@ class GitHubClient:
             remaining = self.cooldown.get(resource, 0) - time.time()
             if remaining > 0:
                 raise GitHubError(
-                    "GitHub rate limit: wait before retrying.",
-                    retry_after=max(1, int(remaining) + 1),
+                    "GitHub rate limit: returning partial results; wait before retrying.",
+                    retry_after=max(1, math.ceil(remaining)),
                     status=429,
                 )
+            if resource == "search":
+                await self._pace_search()
+                # Another queued request may have received a rate-limit response.
+                remaining = self.cooldown.get(resource, 0) - time.time()
+                if remaining > 0:
+                    raise GitHubError(
+                        "GitHub rate limit: returning partial results; wait before retrying.",
+                        retry_after=max(1, math.ceil(remaining)),
+                        status=429,
+                    )
             headers = {
                 "Accept": "application/vnd.github+json",
                 "X-GitHub-Api-Version": "2022-11-28",
@@ -192,10 +268,25 @@ class GitHubClient:
                     follow_redirects=False,
                 ) as client:
                     response = await client.get(endpoint, params=params)
+            except httpx.TimeoutException:
+                raise GitHubError(
+                    "GitHub request timed out (20s); returning partial results. Retry later.",
+                    status=408,
+                ) from None
             except httpx.HTTPError:
                 raise GitHubError(
                     "GitHub network request failed; check connectivity and retry."
                 ) from None
+            limits: dict[str, int] = {}
+            for name in ("limit", "remaining", "reset"):
+                with suppress(KeyError, ValueError):
+                    limits[name] = int(response.headers[f"x-ratelimit-{name}"])
+            if limits:
+                self.rate_limits[resource] = limits
+            if response.is_success and limits.get("remaining") == 0:
+                self.cooldown[resource] = max(
+                    time.time() + 1, limits.get("reset", time.time() + 60)
+                )
             if response.status_code in (403, 429):
                 if (
                     response.status_code == 429
@@ -214,7 +305,8 @@ class GitHubClient:
                     delay = max(1, min(delay, 3600))
                     self.cooldown[resource] = time.time() + delay
                     raise GitHubError(
-                        "GitHub rate limit reached; retry later or use GITHUB_TOKEN.",
+                        "GitHub rate limit reached; returning partial results. "
+                        "Wait for retry_after_seconds or use GITHUB_TOKEN / GH_TOKEN.",
                         retry_after=delay,
                         status=response.status_code,
                     )

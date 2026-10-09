@@ -117,6 +117,7 @@ async def test_search_sort_by_stars_and_validation():
         await discovery.search_existing(idea, sort_by="vibes")
 
 
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX disk cache permissions")
 def test_cache_prune_removes_only_expired_entries(tmp_path):
     cache = DiskCache(tmp_path, ttl=60)
     cache.put("/search/repositories", {"q": "old"}, {"x": 1})
@@ -322,6 +323,7 @@ async def test_auth_accepts_lowercase_scheme_and_rejects_websocket():
     assert sent == [{"type": "websocket.close", "code": 1008}]
 
 
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX disk cache permissions")
 def test_cache_in_unsafe_directory_is_ignored(tmp_path):
     folder = tmp_path / "cache"
     folder.mkdir()
@@ -339,6 +341,7 @@ def test_hidden_readme_text_is_removed():
     assert cleaned == "hi there"
 
 
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX disk cache permissions")
 def test_prune_preserves_unrelated_files_disabled_cache_and_unsafe_directory(tmp_path):
     package = tmp_path / "package.json"
     package.write_text('{"name":"fixture"}')

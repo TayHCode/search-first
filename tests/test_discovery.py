@@ -364,3 +364,65 @@ async def test_abandoned_flag_and_maintenance_signal_share_one_reference(
         assert int(re.search(r"(\d+) days", flag).group(1)) == signal_days
     else:
         assert signal_days == days
+
+
+async def test_total_search_timeout_preserves_earlier_candidates():
+    import asyncio
+    import time
+
+    calls = 0
+
+    async def handler(_):
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            await asyncio.sleep(1)
+        return httpx.Response(
+            200,
+            json={
+                "total_count": 1,
+                "items": [
+                    {
+                        "full_name": "example/tab-close",
+                        "html_url": "https://github.com/example/tab-close",
+                        "description": "Terminal tool closes idle Chrome tabs",
+                        "license": {"spdx_id": "MIT"},
+                    }
+                ],
+            },
+        )
+
+    client = GitHubClient(transport=httpx.MockTransport(handler), call_timeout=0.02)
+    started = time.monotonic()
+    result = await Discovery(client).search_existing(
+        "a terminal tool to close idle chrome tabs", ["chrome idle tabs", "terminal tab close"]
+    )
+    assert time.monotonic() - started < 0.5
+    assert len(result["candidates"]) == 1
+    assert not result["verdict"]["search_complete"]
+    assert result["errors"][0]["status"] == 408
+    assert "Partial results" in result["message"]
+    assert calls == 2
+
+
+async def test_compare_shares_one_deadline_across_all_repos():
+    import asyncio
+    import time
+
+    async def handler(request):
+        await asyncio.sleep(0.015)
+        if request.url.path.count("/") == 3:
+            name = request.url.path.removeprefix("/repos/")
+            return httpx.Response(
+                200, json={"full_name": name, "html_url": f"https://github.com/{name}"}
+            )
+        return httpx.Response(404)
+
+    client = GitHubClient(transport=httpx.MockTransport(handler), call_timeout=0.03)
+    started = time.monotonic()
+    result = await Discovery(client).compare_candidates(
+        "idle browser tabs", ["example/one", "example/two", "example/three"]
+    )
+    assert time.monotonic() - started < 0.3
+    assert not result["verdict"]["search_complete"]
+    assert any(error["status"] == 408 for error in result["errors"])
