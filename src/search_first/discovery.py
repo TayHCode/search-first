@@ -16,10 +16,18 @@ from .ranking import (
     popularity_score,
     pull_request_activity,
     rank_repo,
+    relevance_key,
     repo_summary,
     verdict,
 )
-from .weights import DEFAULT_OVERALL, DEFAULT_RANK, OverallWeights, RankWeights, weights_dict
+from .weights import (
+    DEFAULT_OVERALL,
+    DEFAULT_RANK,
+    OverallWeights,
+    RankWeights,
+    weight_warnings,
+    weights_dict,
+)
 
 SEARCH_SORTS = ("relevance", "stars", "recent_activity")
 COMPARE_SORTS = ("overall", "relevance", "stars", "maintenance")
@@ -196,9 +204,14 @@ class Discovery:
                 rank_repo(idea, repo, matches[key], self.now, self.rank_weights)
                 for key, repo in found.items()
             ],
-            key=lambda r: (-r["relevance_score"], -r["stars"], r["name"]),
+            key=relevance_key,
         )
-        verdict_data = verdict(ranked, complete=not errors)
+        verdict_data = verdict(ranked, complete=not errors, idea=idea)
+        warnings = weight_warnings(self.rank_weights)
+        if warnings:
+            if verdict_data["recommendation"] == "build from scratch":
+                verdict_data["recommendation"] = "inconclusive"
+            verdict_data["reasoning"] += " " + " ".join(warnings)
         # Re-order the returned rows only; the verdict always uses relevance order.
         if sort_by == "stars":
             ranked.sort(key=lambda r: (not r["plausible"], -r["stars"], r["name"]))
@@ -215,6 +228,7 @@ class Discovery:
             "verdict": verdict_data,
             "sort_by": sort_by,
             "weights": {"rank": weights_dict(self.rank_weights)},
+            "warnings": weight_warnings(self.rank_weights),
             "candidates": ranked[:limit],
             "unique_candidates_evaluated": len(ranked),
             "queries": plan,
@@ -435,13 +449,14 @@ class Discovery:
                     break
         keys = {
             "overall": lambda r: (-r["overall_score"], r["name"]),
-            "relevance": lambda r: (-r["relevance_score"], r["name"]),
+            "relevance": relevance_key,
             "stars": lambda r: (-r["stars"], r["name"]),
             "maintenance": lambda r: (-(r["maintenance"]["score"] or 0), r["name"]),
         }
         verdict_data = verdict(
             sorted(rows, key=keys["relevance"]),
             complete=not errors and not any(row["inspection_errors"] for row in rows),
+            idea=idea,
         )
         order = keys[sort_by]
         rows.sort(key=order)
@@ -473,6 +488,7 @@ class Discovery:
                 "rank": weights_dict(self.rank_weights),
                 "overall": weights_dict(self.overall_weights),
             },
+            "warnings": weight_warnings(self.rank_weights) + weight_warnings(self.overall_weights),
             "note": "overall_score = weighted idea fit + maintenance + adoption (stars); "
             "see weights (defaults 60/30/10). "
             "Comparison scores have no search-rank boost. Agent must fill fit checklists; "

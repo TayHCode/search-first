@@ -172,6 +172,9 @@ entries are pruned at startup and replaced when reused.
 }
 ```
 
+The `idea` must contain **1–2000 characters** and name concrete behavior and a domain.
+Vague aspirations such as "something to make my life easier" yield `inconclusive`.
+
 Pass **3 to 6 short query variants**: synonyms, different framings, ecosystem terms.
 Queries are plain terms, optionally quoted, not GitHub qualifiers. The server always
 adds one idea-derived variant (the first four meaningful words of the idea). If you pass
@@ -183,7 +186,10 @@ projects. Archived projects are excluded unless explicitly requested. `sort_by`
 orders the returned rows: `relevance` (default), `stars`, or `recent_activity`
 (newest push first). Implausible matches always sort last, whatever `sort_by` is, so
 `stars` orders only the plausible rows by stars and then lists the implausible ones.
-The verdict always uses relevance order. `use as is` additionally requires at least 25 stars and a push
+The verdict always uses relevance order: `closest_match`, when present, is the
+first row of the relevance shortlist, including its license/archive caveats. With
+`stars` or `recent_activity`, that same match may appear later. Missing key terms
+or hard constraints prevent `use as is` and `fork and adapt`. `use as is` additionally requires at least 25 stars and a push
 within a year; a strong match with less adoption is reported as `fork and adapt`.
 
 Each candidate includes name, URL, description, stars, forks, last push, archived
@@ -222,7 +228,8 @@ An abbreviated **real recorded result**, not invented example data:
 
 This excerpt omits fields and uses `candidate` for a single row; the actual tool
 returns `candidates` as an array. See [full search output](docs/examples/idle-tabs.json)
-for the complete schema and timestamped facts.
+for the complete recorded schema and timestamped facts. This historical snapshot
+predates the current constraint safeguards; live scores and verdicts can differ.
 The example file is a frozen snapshot, so its counts (it reports 65 plausible of 85
 evaluated) differ from the excerpt above, and live counts drift as GitHub changes.
 The recorded data is a trimmed projection: some candidates and descriptions are
@@ -407,9 +414,12 @@ this MVP has not configured one. Start a chat and select the connector/plugin.
 Access and labels depend on your account and admin policies. See
 [OpenAI's official connection guide](https://developers.openai.com/plugins/deploy/connect-chatgpt).
 
-**Test status:** Official SDK client initialization, tool listing and calls are tested
-in-process, over stdio, and over Streamable HTTP on localhost/ASGI. No Claude Code,
-Claude Desktop, claude.ai, or ChatGPT account-level connector flow has been tested.
+**Test status:** Official SDK initialization, listing and calls are tested in-process,
+over stdio, and over Streamable HTTP on localhost/ASGI. Installation and live stdio
+search/inspection/comparison were verified on Linux, macOS M1 and Windows; stock
+macOS Python 3.9.6 uses the uv route. Claude Code project registration and headless
+read-only calls with explicit permissions were verified. Interactive project approval,
+Claude Desktop, claude.ai and ChatGPT account-level connector flows remain unverified.
 Remote HTTPS, ingress authentication and OAuth are not tested or deployed. Protocol
 compatibility is not a claim that every client's connector UI will accept this setup.
 
@@ -433,8 +443,14 @@ logarithmic stars (the weights are settable, see below). Terms come from name, d
 topics are split and a tiny suffix stripper equates limit/limiter/limiting. If the idea
 names a language (for example Python) a repo in another language is penalized. Archive, unconfirmed-license and resource-list/tutorial penalties apply.
 A small synonym vocabulary maps words such as idle/inactive and terminal/TUI/CLI.
-A plausible candidate needs at least 50% idea-term coverage, two matched terms and a
-score ≥0.55. The server always runs one derived whole-idea variant. If you pass two or
+A plausible candidate needs a specific idea, no missing hard constraints, at least
+50% idea-term coverage, two matched terms and a score ≥0.55. Missing key terms
+cap the score below 0.8; missing hard constraints cap it below 0.55. Explicit
+constraints include terminal/CLI/command line, requested language, named operating
+system, Chrome/Chromium and self-hosted. The response surfaces `missing_key_terms`
+and `missing_constraints`; missing metadata evidence is not proof of impossibility.
+A reuse/fork verdict needs all normalized key terms covered. Generic aspirations
+("life easier", "computer faster") yield `inconclusive`, even with popular hits. The server always runs one derived whole-idea variant. If you pass two or
 more variants it skips its extra derived variants (two-word, trailing-words and topic
 searches) to save search quota.
 Candidates below that threshold with at least two matched idea terms, 25% coverage
@@ -468,7 +484,11 @@ has no search-rank evidence, only `idea_match`, `freshness` and `stars` count an
 are rescaled by their sum (so a perfect repo can still reach 1.0). The overall weights
 blend `relevance_score`, `maintenance` (0.5 when unknown) and stars into
 `overall_score`. Language, archived, license and resource-list penalties are fixed.
-Responses carry a `weights` object with the weights actually in use.
+Responses carry a `weights` object with the weights actually in use. A signal
+with at least 90% of the normalized weight also adds a clear response warning.
+For example `stars=1000000` nearly removes all fit signals and can produce an
+unrelated order; it remains valid, but is unsuitable for judging functional fit.
+The missing-term and constraint caps are fixed safeguards alongside the existing penalties.
 
 The stars term is `log10(1 + stars) / 4`, capped at 1:
 
@@ -482,7 +502,7 @@ Changing weights therefore changes how many candidates count as plausible: raisi
 it. Compare plausible counts only between runs that use the same weights.
 
 ```sh
-search-first --rank-weights "stars=0,freshness=0.1" --overall-weights "maintenance=0.5"
+search-first --rank-weights "idea_match=0.6,query_match=0.2,stars=0.05" --overall-weights "maintenance=0.5"
 ```
 
 In an MCP client config, use an `env` block:
@@ -502,8 +522,9 @@ In an MCP client config, use an `env` block:
 }
 ```
 
-The defaults are judgment calls. They have not been tuned or tested against real
-searches; the tests only check that the arithmetic and validation behave as documented.
+The defaults are judgment calls, not a benchmark-tuned model. Synthetic regressions
+and limited live smoke searches check the reported cases; they do not establish
+general search quality. Weight arithmetic and startup validation have hermetic tests.
 
 ### Honest limitations
 

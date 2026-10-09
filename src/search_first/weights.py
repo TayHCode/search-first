@@ -71,3 +71,18 @@ def parse_weights(text: str | None, kind: type[W]) -> W:
 
 def weights_dict(weights: RankWeights | OverallWeights) -> dict[str, float]:
     return {name: round(value, 4) for name, value in asdict(weights).items()}
+
+
+def weight_warnings(weights: RankWeights | OverallWeights) -> list[str]:
+    """Keep extreme valid settings, but expose the consequence in every response."""
+    values = asdict(weights)
+    total = math.fsum(values.values())
+    name = max(values, key=lambda key: values[key])
+    share = values[name] / total
+    if share >= 0.9:
+        return [
+            f"Ranking warning: {name} dominates ({share:.1%} of weights). "
+            "Other signals contribute little; unrelated repositories may rank highly. "
+            "Review missing constraints and use balanced weights for fit decisions."
+        ]
+    return []

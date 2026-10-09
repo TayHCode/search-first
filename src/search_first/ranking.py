@@ -61,6 +61,9 @@ STOP = set(
 # Small, transparent vocabulary: the first word of each group is the canonical form.
 # Agents supply domain-specific synonyms in their query variants.
 GROUPS = [
+    ("windows", "win32", "win64"),
+    ("macos", "mac", "osx"),
+    ("async", "asyncio", "asynchronous"),
     ("tab", "tabs"),
     ("close", "closes", "closing", "closer", "autoclose"),
     ("idle", "inactive", "unused", "stale"),
@@ -116,6 +119,8 @@ def stem(word: str) -> str:
 def tokens(text: str) -> list[str]:
     """Lowercase terms; hyphenated words yield each part and the joined form."""
     out: list[str] = []
+    text = re.sub(r"\bcommand[ -]line\b", "terminal", text, flags=re.I)
+    text = re.sub(r"\bself[ -]hosted\b", "selfhosted", text, flags=re.I)
     for raw in re.findall(r"[a-z0-9]+(?:-[a-z0-9]+)*", text.lower()):
         parts = raw.split("-")
         for part in [*parts, "".join(parts)] if len(parts) > 1 else parts:
@@ -123,6 +128,58 @@ def tokens(text: str) -> list[str]:
                 continue
             out.append(NORMAL.get(part) or NORMAL.get(stem(part)) or stem(part))
     return list(dict.fromkeys(out))
+
+
+# These words describe a general aspiration, not a concrete behavior/domain.
+VAGUE_TERMS = set(
+    tokens("life easier easy better faster computer useful helpful productivity helper")
+)
+
+
+def key_terms(idea: str) -> set[str]:
+    return set(tokens(idea)) - VAGUE_TERMS
+
+
+def specific_idea(idea: str) -> bool:
+    return len(key_terms(idea)) >= 2
+
+
+def missing_constraints(idea: str, text: str) -> list[str]:
+    """Small explicit hard-constraint vocabulary; absence means unverified, not impossible."""
+    wanted = set(tokens(idea))
+    actual = set(tokens(text))
+    missing = wanted.intersection({"terminal", "windows", "macos", "linux"}) - actual
+    for pattern, label in [
+        (r"\bself[ -]hosted\b", "self-hosted"),
+        (r"\b(?:chrome|chromium)\b", "chrome"),
+    ]:
+        if re.search(pattern, idea, re.I) and not re.search(pattern, text, re.I):
+            missing.add(label)
+    for language in mentioned_languages(idea):
+        if language not in text.lower():
+            missing.add(language)
+    return sorted(missing)
+
+
+def is_adjacent(row: dict[str, Any]) -> bool:
+    return (
+        not row["plausible"]
+        and row.get("idea_is_specific", True)
+        and len(row.get("matched_idea_terms", [])) >= 2
+        and row["idea_term_coverage"] >= 0.25
+        and row["relevance_score"] >= 0.3
+    )
+
+
+def relevance_key(row: dict[str, Any]) -> tuple[Any, ...]:
+    # Apply the same plausibility grouping in all presentation orders.
+    return (
+        not row["plausible"],
+        not is_adjacent(row),
+        -row["relevance_score"],
+        -row["stars"],
+        row["name"],
+    )
 
 
 def mentioned_languages(idea: str) -> set[str]:
@@ -332,6 +389,18 @@ def rank_repo(
             else 0
         )
     penalties = []
+    specific = specific_idea(idea)
+    missing_keys = sorted(key_terms(idea) - repo_terms)
+    hard_missing = missing_constraints(idea, text)
+    if missing_keys:
+        score = min(score, 0.79)
+        penalties.append("key terms unverified: " + ", ".join(missing_keys))
+    if hard_missing:
+        score = min(score, 0.54)
+        penalties.append("hard constraints unverified: " + ", ".join(hard_missing))
+    if not specific:
+        score = min(score, 0.29)
+        penalties.append("idea too vague; name a concrete behavior and domain")
     wanted = mentioned_languages(idea)
     if wanted and result["language"] and result["language"].lower() not in wanted:
         score -= 0.12
@@ -351,8 +420,13 @@ def rank_repo(
             "days_since_push": age,
             "idea_term_coverage": round(coverage, 3),
             "missing_idea_terms": sorted(idea_terms - repo_terms),
+            "missing_key_terms": missing_keys,
+            "missing_constraints": hard_missing,
+            "idea_is_specific": specific,
             "matched_idea_terms": matched,
-            "plausible": coverage >= 0.5
+            "plausible": specific
+            and not hard_missing
+            and coverage >= 0.5
             and score >= 0.55
             and len(matched) >= min(2, len(idea_terms)),
             "why_it_matched": (
@@ -371,23 +445,35 @@ def rank_repo(
     return result
 
 
-def verdict(ranked: list[dict[str, Any]], *, complete: bool) -> dict[str, Any]:
+def verdict(
+    ranked: list[dict[str, Any]], *, complete: bool, idea: str | None = None
+) -> dict[str, Any]:
     plausible = [r for r in ranked if r["plausible"]]
-    # A threshold is a shortlist heuristic, not evidence that nothing exists.
-    # Surface adjacent products for inspection when a longer idea dilutes coverage.
-    adjacent = [
-        r
-        for r in ranked
-        if not r["plausible"]
-        and len(r.get("matched_idea_terms", [])) >= 2
-        and r["idea_term_coverage"] >= 0.25
-        and r["relevance_score"] >= 0.3
-    ]
-    # Prefer the best plausible match that is licensed and active over an unusable top hit.
-    closest = next((r for r in plausible if r["license"] and not r["archived"]), None)
-    closest = closest or (plausible[0] if plausible else None)
-    if not closest and adjacent:
-        closest = next((r for r in adjacent if r["license"] and not r["archived"]), adjacent[0])
+    adjacent = [r for r in ranked if is_adjacent(r)]
+    # The caller supplies relevance order; never silently select a lower licensed row.
+    closest = ranked[0] if ranked and (ranked[0]["plausible"] or is_adjacent(ranked[0])) else None
+    vague = (idea is not None and not specific_idea(idea)) or bool(
+        ranked and not ranked[0].get("idea_is_specific", True)
+    )
+    if vague:
+        closest = None
+        recommendation = "inconclusive"
+        reasoning = (
+            "Idea is too vague. Name a concrete behavior, domain and must-have constraints "
+            "before choosing a reusable base."
+        )
+    elif closest and (closest.get("missing_constraints") or closest.get("missing_key_terms")):
+        recommendation = "inconclusive"
+        gaps = sorted(
+            set(closest.get("missing_constraints", []) + closest.get("missing_key_terms", []))
+        )
+        reasoning = (
+            "Required behavior or constraints are unverified: "
+            + ", ".join(gaps)
+            + ". Inspect README and test those requirements; "
+            "broaden queries before choosing a base."
+        )
+    elif not plausible and adjacent:
         recommendation = "inconclusive"
         reasoning = (
             "Adjacent candidates exist below the lexical plausibility threshold. Inspect "
@@ -406,8 +492,8 @@ def verdict(ranked: list[dict[str, Any]], *, complete: bool) -> dict[str, Any]:
     elif not closest["license"] or closest["archived"]:
         recommendation = "borrow parts"
         reasoning = (
-            "Every plausible match has license or archive concerns. Check permission and "
-            "inspect alternatives before reusing any code."
+            "The first relevance-ranked match has license or archive concerns. "
+            "Check permission and inspect alternatives before reusing any code."
         )
     elif (
         closest["idea_term_coverage"] >= 0.85
@@ -432,7 +518,7 @@ def verdict(ranked: list[dict[str, Any]], *, complete: bool) -> dict[str, Any]:
             "A plausible existing base has a recognized license. Inspect, run its tests "
             "in isolation, and identify the missing behavior before forking."
         )
-    if not complete and closest:
+    if not complete:
         reasoning += " Evidence is incomplete; retry failed reads before making a decision."
     return {
         "closest_match": {"name": closest["name"], "url": closest["url"]} if closest else None,
