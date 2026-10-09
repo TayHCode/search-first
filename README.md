@@ -12,43 +12,72 @@ and the project and distribution (`search-first-mcp`) names may still change.
 
 ## Install and run
 
-Python 3.11+ required. Until a package is published, install from a local clone:
+The minimum is **Python 3.11** (the server uses Python 3.11's `asyncio.timeout`
+and `datetime.UTC`). Git is needed to clone the source. The recommended route is
+**uvx**, which can download a supported Python without changing your system Python
+or needing administrator access. Install [uv using its official installer](https://docs.astral.sh/uv/getting-started/installation/):
+
+- Linux (including Debian/Ubuntu): `curl -LsSf https://astral.sh/uv/install.sh | sh`
+- macOS: `curl -LsSf https://astral.sh/uv/install.sh | sh`
+- Windows PowerShell: `powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"`
+
+Open a new terminal so `uv` and `uvx` are on PATH. Until a package is published,
+clone the source and run it locally (these commands also work in PowerShell):
 
 ```sh
-cd /path/to/local/clone
-uvx --from . search-first                         # stdio, default
-uvx --from . search-first --transport streamable-http  # http://127.0.0.1:8000/mcp
+git clone https://github.com/TayHCode/search-first.git
+cd search-first
+uvx --python 3.12 --from . search-first --help
+uvx --python 3.12 --from . search-first
 ```
 
-Or install with pip in a virtual environment:
+The help command verifies installation without GitHub credentials. The next command
+starts stdio: **a server waiting silently for an MCP client is normal**. Use Ctrl+C
+to exit. Stdout is reserved for MCP messages. For local HTTP instead:
 
 ```sh
+uvx --python 3.12 --from . search-first --transport streamable-http
+```
+
+The endpoint is `http://127.0.0.1:8000/mcp`. Connect an MCP client, then stop the
+server with Ctrl+C when finished.
+
+### Alternative: pip in a virtual environment
+
+Check the interpreter **before installing dependencies**. The preflight prints
+`search-first needs Python 3.11 or newer; you have X` on an old interpreter,
+rather than pip's misleading dependency error `from versions: none`.
+
+Linux/macOS, from the clone:
+
+```sh
+python3 scripts/check_python.py
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install .
-search-first
-search-first --transport streamable-http --port 8000
-```
-
-### Verified offline quickstart
-
-From a local clone with Python 3.11+ and a virtual environment activated:
-
-```sh
-python -m pip install '.[dev]'
 search-first --help
 ```
 
-This verifies installation and the entry point without GitHub credentials or a
-running service. The development checks listed under "Proof and development" run the
-full hermetic tests, lint, type checks and a package build.
+Stop if the preflight fails. Stock macOS `/usr/bin/python3` may be **3.9.6**:
+use the uvx route above, or install Python 3.11+ from [python.org](https://www.python.org/downloads/macos/)
+and run the preflight with that interpreter. On Debian/Ubuntu, missing `ensurepip`
+means you need the matching `python3-venv` package (`sudo apt install python3-venv`
+with administrator access); the uvx route works without sudo. For a uv-created
+venv use `uv venv --python 3.12` followed by `uv pip install --python .venv .`;
+`uv venv` alone does not install pip.
 
-`search-first --help` lists all options. Stdio stdout is reserved for MCP messages.
-A server waiting silently for a client is normal.
+Windows PowerShell, with Python 3.11 installed from [python.org](https://www.python.org/downloads/windows/):
 
-On Debian and Ubuntu, `python3 -m venv` can fail with "ensurepip is not available"
-until you install the `python3-venv` package (for example `sudo apt install
-python3-venv`). Alternatively, use the `uvx` route above or `uv venv`.
+```powershell
+py -3.11 scripts/check_python.py
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install .
+.\.venv\Scripts\search-first.exe --help
+```
+
+Use `py -3.12` if 3.12 is installed instead. Direct executable paths avoid changing
+PowerShell's activation-script policy. To run development checks, install `'.[dev]'`
+in place of `.` (quote it in PowerShell too); see "Proof and development" below.
 
 The server does **not** call a model or require model credentials. Your calling agent
 provides query variants, judges functional fit, and controls any subsequent work.
@@ -215,28 +244,74 @@ the MCP server; configure it separately.
 
 ### Claude Code and Claude Desktop (local stdio)
 
-Claude Code, from your project directory:
+Claude Code, from your project directory (quote paths that contain spaces):
 
 ```sh
-claude mcp add --transport stdio search-first -- uvx --from /absolute/path/search-first search-first
+claude mcp add --transport stdio --scope project search-first -- uvx --python 3.12 --from "/absolute/path/search-first" search-first
 ```
 
-Or add this to Claude Desktop's `claude_desktop_config.json` `mcpServers` object:
+This writes `.mcp.json` in that project. Project-scoped servers need approval:
+start **interactive** `claude` in the project, approve the server when prompted,
+and use `/mcp` to inspect its status. Server approval and permission to call tools
+are separate. A healthy server alone does not grant headless tool permission.
+
+For a headless session, save the JSON below as `search-first.mcp.json` with your
+actual absolute paths, then explicitly allow these read-only tools:
+
+```sh
+claude -p "Call search_existing for a terminal tool to close idle chrome tabs, using variants chrome idle tabs and CLI close inactive tabs. Report missing constraints." --mcp-config search-first.mcp.json --strict-mcp-config --allowedTools "mcp__search-first__search_existing" "mcp__search-first__inspect_repo" "mcp__search-first__compare_candidates"
+```
+
+The same command works in PowerShell. Alternatively, put the explicit permission
+rules in your project's `.claude/settings.local.json`:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "mcp__search-first__search_existing",
+      "mcp__search-first__inspect_repo",
+      "mcp__search-first__compare_candidates"
+    ]
+  }
+}
+```
+
+Headless sessions cannot answer an approval prompt. `--mcp-config` selects the
+server configuration; `--allowedTools` grants the tool permissions. Review both
+before running. See the [official MCP guide](https://code.claude.com/docs/en/mcp)
+and [CLI permission flags](https://code.claude.com/docs/en/cli-reference).
+
+For Claude Desktop, use the same `mcpServers` object in
+`claude_desktop_config.json`. A macOS example (replace the path components):
 
 ```json
 {
   "mcpServers": {
     "search-first": {
-      "command": "uvx",
-      "args": ["--from", "/absolute/path/search-first", "search-first"]
+      "command": "/Users/your-name/.local/bin/uvx",
+      "args": ["--python", "3.12", "--from", "/Users/your-name/projects/search-first", "search-first"]
     }
   }
 }
 ```
 
-Use an absolute executable path if the GUI does not inherit your shell PATH.
-Restart the client and ask it to list the three tools, then try the idle-tabs example.
-See [Claude Code's official MCP guide](https://code.claude.com/docs/en/mcp).
+Windows JSON uses escaped backslashes (or forward slashes). Array elements are
+already arguments: do not add literal shell quotes around paths, even with spaces.
+
+```json
+{
+  "mcpServers": {
+    "search-first": {
+      "command": "C:\\Users\\your-name\\.local\\bin\\uvx.exe",
+      "args": ["--python", "3.12", "--from", "C:\\Users\\your-name\\projects\\search-first", "search-first"]
+    }
+  }
+}
+```
+
+Use the absolute executable path because a GUI may not inherit your shell PATH.
+Restart Desktop and ask it to list the three tools, then try the idle-tabs example.
 
 ### Claude and ChatGPT connectors (remote Streamable HTTP)
 
