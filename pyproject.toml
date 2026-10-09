@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "search-first-mcp"
+version = "0.1.0"
+description = "Search GitHub before building: discover, inspect, and compare existing projects via MCP."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{name = "TayHCode"}]
+keywords = ["mcp", "model-context-protocol", "github", "search", "agents", "reuse"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development",
+]
+dependencies = ["mcp>=2.3,<3", "httpx>=0.28,<0.29"]
+
+[project.scripts]
+search-first = "search_first.server:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=9,<10", "pytest-asyncio>=1.4,<2", "ruff>=0.16,<0.17", "mypy>=2.4,<3", "build>=1.4,<2"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/search_first"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src"]

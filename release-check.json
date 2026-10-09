@@ -1,0 +1,166 @@
+{
+  "exclude": [],
+  "approvals": [
+    {
+      "kind": "ipv4",
+      "path": "README.md",
+      "fingerprint": "12ca17b49af22894",
+      "scope": "tree",
+      "reason": "Public loopback address used by local examples, bind defaults and hermetic protocol tests."
+    },
+    {
+      "kind": "ipv4",
+      "path": "README.md",
+      "fingerprint": "12ca17b49af22894",
+      "scope": "history",
+      "reason": "Public loopback address used by local examples, bind defaults and hermetic protocol tests."
+    },
+    {
+      "kind": "ipv4",
+      "path": "tests/conftest.py",
+      "fingerprint": "12ca17b49af22894",
+      "scope": "tree",
+      "reason": "Public loopback address used by local examples, bind defaults and hermetic protocol tests."
+    },
+    {
+      "kind": "ipv4",
+      "path": "tests/conftest.py",
+      "fingerprint": "12ca17b49af22894",
+      "scope": "history",
+      "reason": "Public loopback address used by local examples, bind defaults and hermetic protocol tests."
+    },
+    {
+      "kind": "ipv6",
+      "path": "tests/conftest.py",
+      "fingerprint": "eff8e7ca506627fe",
+      "scope": "tree",
+      "reason": "Public loopback address used by local examples, bind defaults and hermetic protocol tests."
+    },
+    {
+      "kind": "ipv6",
+      "path": "tests/conftest.py",
+      "fingerprint": "eff8e7ca506627fe",
+      "scope": "history",
+      "reason": "Public loopback address used by local examples, bind defaults and hermetic protocol tests."
+    },
+    {
+      "kind": "ipv4",
+      "path": "tests/test_maintenance.py",
+      "fingerprint": "12ca17b49af22894",
+      "scope": "tree",
+      "reason": "Public loopback address used by local examples, bind defaults and hermetic protocol tests."
+    },
+    {
+      "kind": "ipv4",
+      "path": "tests/test_maintenance.py",
+      "fingerprint": "12ca17b49af22894",
+      "scope": "history",
+      "reason": "Public loopback address used by local examples, bind defaults and hermetic protocol tests."
+    },
+    {
+      "kind": "ipv4",
+      "path": "src/search_first/server.py",
+      "fingerprint": "12ca17b49af22894",
+      "scope": "tree",
+      "reason": "Public loopback address used by local examples, bind defaults and hermetic protocol tests."
+    },
+    {
+      "kind": "ipv4",
+      "path": "src/search_first/server.py",
+      "fingerprint": "12ca17b49af22894",
+      "scope": "history",
+      "reason": "Public loopback address used by local examples, bind defaults and hermetic protocol tests."
+    },
+    {
+      "kind": "ipv6",
+      "path": "src/search_first/server.py",
+      "fingerprint": "eff8e7ca506627fe",
+      "scope": "tree",
+      "reason": "Public loopback address used by local examples, bind defaults and hermetic protocol tests."
+    },
+    {
+      "kind": "ipv6",
+      "path": "src/search_first/server.py",
+      "fingerprint": "eff8e7ca506627fe",
+      "scope": "history",
+      "reason": "Public loopback address used by local examples, bind defaults and hermetic protocol tests."
+    },
+    {
+      "kind": "phone",
+      "path": "tests/fixtures/github.json",
+      "fingerprint": "8d5ae57844b54ba2",
+      "scope": "tree",
+      "reason": "Verified public GitHub login digits in a repository name and its matching GitHub URL, not a telephone number."
+    },
+    {
+      "kind": "phone",
+      "path": "tests/fixtures/github.json",
+      "fingerprint": "8d5ae57844b54ba2",
+      "scope": "history",
+      "reason": "Verified public GitHub login digits in a repository name and its matching GitHub URL, not a telephone number."
+    }
+  ],
+  "quickstart": [
+    {
+      "file": "README.md",
+      "line": 38,
+      "argv": [
+        "python",
+        "-m",
+        "pip",
+        "install",
+        ".[dev]"
+      ]
+    },
+    {
+      "file": "README.md",
+      "line": 39,
+      "argv": [
+        "search-first",
+        "--help"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "role": "tests",
+      "argv": [
+        "python",
+        "-m",
+        "pytest",
+        "-q"
+      ]
+    },
+    {
+      "role": "lint",
+      "argv": [
+        "ruff",
+        "check",
+        "."
+      ]
+    },
+    {
+      "role": "lint",
+      "argv": [
+        "ruff",
+        "format",
+        "--check",
+        "."
+      ]
+    },
+    {
+      "role": "types",
+      "argv": [
+        "mypy"
+      ]
+    },
+    {
+      "role": "build",
+      "argv": [
+        "python",
+        "-m",
+        "build"
+      ]
+    }
+  ]
+}

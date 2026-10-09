@@ -1,0 +1,445 @@
+"""Explainable lexical ranking; scores are evidence signals, not semantic guarantees."""
+
+from __future__ import annotations
+
+import math
+import re
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+from .weights import DEFAULT_RANK, RankWeights
+
+STOP = set(
+    [
+        "a",
+        "an",
+        "the",
+        "and",
+        "or",
+        "for",
+        "of",
+        "to",
+        "in",
+        "on",
+        "with",
+        "that",
+        "this",
+        "it",
+        "is",
+        "are",
+        "be",
+        "as",
+        "by",
+        "from",
+        "i",
+        "my",
+        "we",
+        "want",
+        "need",
+        "build",
+        "create",
+        "make",
+        "project",
+        "application",
+        "app",
+        "tool",
+        "script",
+        "automatically",
+        "self",
+        "hosted",
+        "running",
+        "trying",
+        "something",
+        "library",
+        "lib",
+        "outgoing",
+        "simple",
+        "lightweight",
+        "using",
+    ]
+)
+# Small, transparent vocabulary: the first word of each group is the canonical form.
+# Agents supply domain-specific synonyms in their query variants.
+GROUPS = [
+    ("tab", "tabs"),
+    ("close", "closes", "closing", "closer", "autoclose"),
+    ("idle", "inactive", "unused", "stale"),
+    ("auto", "automatic", "automated"),
+    ("browser", "chrome", "chromium", "firefox"),
+    ("extension", "extensions", "addon", "addons", "plugin", "plugins"),
+    ("agent", "agents", "agentic"),
+    ("coding", "code", "coder"),
+    ("terminal", "tui", "cli", "console"),
+    ("orchestrator", "orchestration", "harness", "runner"),
+    ("alert", "alerts", "alerting", "alertmanager"),
+    ("dashboard", "dashboards"),
+    ("monitor", "monitors", "monitoring", "observability"),
+    ("package", "sdk", "module"),
+    ("convert", "converter", "conversion", "transform"),
+    ("server", "service", "daemon"),
+    ("database", "db", "datastore"),
+    ("schedule", "scheduler", "scheduling", "cron"),
+    ("sync", "synchronize", "synchronization", "replicate"),
+    ("search", "searcher", "finder", "discovery"),
+]
+NORMAL = {term: group[0] for group in GROUPS for term in group}
+
+
+LANGUAGES = {
+    "python": "python",
+    "javascript": "javascript",
+    "typescript": "typescript",
+    "golang": "go",
+    "rust": "rust",
+    "java": "java",
+    "kotlin": "kotlin",
+    "swift": "swift",
+    "ruby": "ruby",
+    "php": "php",
+    "csharp": "c#",
+}
+
+
+def stem(word: str) -> str:
+    """Tiny suffix stripper so limiter/limiting/limits compare equal. Not linguistic."""
+    if len(word) > 5 and word.endswith("ing"):
+        return word[:-3]
+    if len(word) > 5 and word.endswith("ers"):
+        return word[:-3]
+    if len(word) > 4 and word.endswith("er"):
+        return word[:-2]
+    if len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
+        return word[:-1]
+    return word
+
+
+def tokens(text: str) -> list[str]:
+    """Lowercase terms; hyphenated words yield each part and the joined form."""
+    out: list[str] = []
+    for raw in re.findall(r"[a-z0-9]+(?:-[a-z0-9]+)*", text.lower()):
+        parts = raw.split("-")
+        for part in [*parts, "".join(parts)] if len(parts) > 1 else parts:
+            if part in STOP:
+                continue
+            out.append(NORMAL.get(part) or NORMAL.get(stem(part)) or stem(part))
+    return list(dict.fromkeys(out))
+
+
+def mentioned_languages(idea: str) -> set[str]:
+    return {LANGUAGES[w] for w in re.findall(r"[a-z0-9#]+", idea.lower()) if w in LANGUAGES}
+
+
+def days_since(value: str | None, now: datetime | None = None) -> int | None:
+    if not value:
+        return None
+    dt = parse_time(value)
+    return max(0, ((now or datetime.now(UTC)) - dt).days) if dt else None
+
+
+def popularity_score(stars: int) -> float:
+    """Logarithmic 0-1 scale: 10 stars ~0.26, 100 ~0.5, 1,000 ~0.75, 10,000+ 1.0."""
+    return min(1.0, math.log10(max(0, stars) + 1) / 4)
+
+
+def parse_time(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def pull_request_activity(
+    closed: list[dict[str, Any]] | None, open_prs: int | None, now: datetime | None = None
+) -> dict[str, Any] | None:
+    """Summarize recently closed pull requests (a bounded, most-recently-updated sample)."""
+    if closed is None:
+        return None
+    now = now or datetime.now(UTC)
+    merged_90, closed_90, days_to_merge = 0, 0, []
+    last_merged: datetime | None = None
+    for pr in closed:
+        if pr.get("bot"):
+            continue  # dependency-bot merges say little about human maintenance
+        done = parse_time(pr.get("closed_at"))
+        merged = parse_time(pr.get("merged_at"))
+        created = parse_time(pr.get("created_at"))
+        if merged:
+            last_merged = max(last_merged, merged) if last_merged else merged
+            if created:
+                days_to_merge.append(max(0.0, (merged - created).total_seconds() / 86400))
+        if done and (now - done).days <= 90:
+            closed_90 += 1
+            merged_90 += bool(merged)
+    days_to_merge.sort()
+    median = days_to_merge[len(days_to_merge) // 2] if days_to_merge else None
+    return {
+        "merged_last_90_days": merged_90,
+        "closed_unmerged_last_90_days": closed_90 - merged_90,
+        "last_merged_at": last_merged.isoformat() if last_merged else None,
+        "median_days_to_merge": round(median, 1) if median is not None else None,
+        "open": open_prs,
+        "sample_size": len(closed),
+        "sample_limit": 30,
+        "note": "Sample of the 30 most recently updated closed PRs, bot PRs excluded; "
+        "counts saturate at 30. Many solo projects commit directly and never merge PRs.",
+    }
+
+
+def maintenance(
+    summary: dict[str, Any],
+    last_commit: str | None,
+    pulls: dict[str, Any] | None,
+    latest_release: str | None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Transparent 0-1 maintenance score from commits, PR flow and releases.
+
+    Components that cannot be measured are left out and the remaining weights are
+    renormalized; confidence drops accordingly. This is a heuristic, not a guarantee.
+    """
+    parts: list[tuple[str, float, float, str]] = []  # name, weight, value, detail
+    # Prefer the default-branch commit date: pushed_at also counts bot/other-branch pushes.
+    newest = parse_time(last_commit) or parse_time(summary.get("last_push"))
+    if newest:
+        age = max(0, ((now or datetime.now(UTC)) - newest).days)
+        value = 1.0 if age < 30 else 0.8 if age < 90 else 0.55 if age < 180 else 0.25
+        value = value if age < 365 else 0.0
+        parts.append(("recent commits", 0.4, value, f"newest push/commit {age} days ago"))
+    if pulls and pulls["sample_size"] > 0:
+        merged = pulls["merged_last_90_days"]
+        parts.append(("merged PRs", 0.25, min(1.0, merged / 5), f"{merged} merged in 90 days"))
+        open_prs = pulls.get("open")
+        if open_prs is not None and merged + min(open_prs, 30) > 0:
+            parts.append(
+                (
+                    "PR backlog",
+                    0.2,
+                    merged / (merged + min(open_prs, 30)),
+                    f"{open_prs} open vs {merged} merged recently",
+                )
+            )
+    release_time = parse_time(latest_release)
+    if release_time:
+        age = max(0, ((now or datetime.now(UTC)) - release_time).days)
+        parts.append(
+            (
+                "releases",
+                0.15,
+                1.0 if age < 365 else 0.5 if age < 730 else 0.0,
+                f"latest stable release {age} days ago",
+            )
+        )
+    total = sum(w for _, w, _, _ in parts)
+    score = sum(w * v for _, w, v, _ in parts) / total if total else None
+    if summary.get("archived"):
+        label, score = "archived", 0.0
+    elif score is None:
+        label = "unknown"
+    elif newest and (now or datetime.now(UTC)) - newest > timedelta(days=730):
+        label = "likely abandoned"
+    else:
+        label = (
+            "actively maintained"
+            if score >= 0.75
+            else "maintained"
+            if score >= 0.5
+            else "slow"
+            if score >= 0.25
+            else "stale"
+        )
+    return {
+        "score": round(score, 3) if score is not None else None,
+        "label": label,
+        "confidence": "high" if len(parts) >= 3 else "medium" if len(parts) == 2 else "low",
+        "signals": [f"{name}: {detail}" for name, _, _, detail in parts],
+        "note": "Heuristic from public metadata (commits, PR flow, releases); "
+        "it does not assess code quality or security.",
+    }
+
+
+def repo_summary(repo: dict[str, Any]) -> dict[str, Any]:
+    license_data = repo.get("license") or {}
+    license_id = license_data.get("spdx_id")
+    return {
+        "name": repo["full_name"],
+        "url": repo["html_url"],
+        "description": repo.get("description"),
+        "stars": repo.get("stargazers_count", 0),
+        "forks": repo.get("forks_count", 0),
+        "last_push": repo.get("pushed_at"),
+        "archived": repo.get("archived", False),
+        "license": license_id if license_id and license_id != "NOASSERTION" else None,
+        "license_name": license_data.get("name"),
+        "language": repo.get("language"),
+        "topics": repo.get("topics", []),
+        "size_kb": repo.get("size", 0),
+    }
+
+
+def rank_repo(
+    idea: str,
+    repo: dict[str, Any],
+    matches: list[dict[str, Any]],
+    now: datetime | None = None,
+    weights: RankWeights = DEFAULT_RANK,
+) -> dict[str, Any]:
+    result = repo_summary(repo)
+    text = " ".join(
+        [
+            result["name"].split("/")[-1],
+            result["description"] or "",
+            " ".join(result["topics"]),
+            result["language"] or "",
+        ]
+    )
+    idea_terms, repo_terms = set(tokens(idea)), set(tokens(text))
+    matched = sorted(idea_terms & repo_terms)
+    coverage = len(matched) / max(1, len(idea_terms))
+    query_coverage = max(
+        (
+            len(set(tokens(m["terms"])) & repo_terms) / max(1, len(tokens(m["terms"])))
+            for m in matches
+        ),
+        default=0,
+    )
+    retrieval = max((1 / math.sqrt(m["rank"]) for m in matches), default=0)
+    multiple = min(1, len(matches) / 3)
+    age = days_since(result["last_push"], now)
+    freshness = 1 if age is not None and age < 180 else 0.5 if age is not None and age < 730 else 0
+    popularity = popularity_score(result["stars"])
+    score = (
+        weights.idea_match * coverage
+        + weights.query_match * query_coverage
+        + weights.github_rank * retrieval
+        + weights.variant_agreement * multiple
+        + weights.freshness * freshness
+        + weights.stars * popularity
+    )
+    if not matches:
+        # No retrieval evidence (e.g. compare): rescale so a perfect repo can reach 1.0.
+        used = weights.idea_match + weights.freshness + weights.stars
+        score = (
+            (
+                weights.idea_match * coverage
+                + weights.freshness * freshness
+                + weights.stars * popularity
+            )
+            / used
+            if used > 0
+            else 0
+        )
+    penalties = []
+    wanted = mentioned_languages(idea)
+    if wanted and result["language"] and result["language"].lower() not in wanted:
+        score -= 0.12
+        penalties.append(f"language {result['language']} differs from the requested language")
+    if result["archived"]:
+        score -= 0.15
+        penalties.append("archived")
+    if not result["license"]:
+        score -= 0.06
+        penalties.append("license not confirmed")
+    if re.search(r"\b(awesome|curated|resources|tutorial|roadmap|course|collection)\b", text, re.I):
+        score -= 0.18
+        penalties.append("may be a resource list or tutorial rather than a runnable product")
+    result.update(
+        {
+            "relevance_score": round(max(0, min(1, score)), 3),
+            "days_since_push": age,
+            "idea_term_coverage": round(coverage, 3),
+            "missing_idea_terms": sorted(idea_terms - repo_terms),
+            "matched_idea_terms": matched,
+            "plausible": coverage >= 0.5
+            and score >= 0.55
+            and len(matched) >= min(2, len(idea_terms)),
+            "why_it_matched": (
+                f"Idea terms: {', '.join(matched) or 'no direct overlap'}; "
+                + (
+                    f"returned by {len(matches)} query variant(s), best GitHub rank "
+                    f"{min(m['rank'] for m in matches)}."
+                    if matches
+                    else "metadata comparison only; no retrieval-rank evidence."
+                )
+                + (f" Cautions: {'; '.join(penalties)}." if penalties else "")
+            ),
+            "matched_queries": [m["query"] for m in matches],
+        }
+    )
+    return result
+
+
+def verdict(ranked: list[dict[str, Any]], *, complete: bool) -> dict[str, Any]:
+    plausible = [r for r in ranked if r["plausible"]]
+    # A threshold is a shortlist heuristic, not evidence that nothing exists.
+    # Surface adjacent products for inspection when a longer idea dilutes coverage.
+    adjacent = [
+        r
+        for r in ranked
+        if not r["plausible"]
+        and len(r.get("matched_idea_terms", [])) >= 2
+        and r["idea_term_coverage"] >= 0.25
+        and r["relevance_score"] >= 0.3
+    ]
+    # Prefer the best plausible match that is licensed and active over an unusable top hit.
+    closest = next((r for r in plausible if r["license"] and not r["archived"]), None)
+    closest = closest or (plausible[0] if plausible else None)
+    if not closest and adjacent:
+        closest = next((r for r in adjacent if r["license"] and not r["archived"]), adjacent[0])
+        recommendation = "inconclusive"
+        reasoning = (
+            "Adjacent candidates exist below the lexical plausibility threshold. Inspect "
+            "their README and required behavior, then broaden queries before choosing to "
+            "build. A low score does not establish that no reusable base exists."
+        )
+    elif not closest:
+        recommendation = "build from scratch" if complete else "inconclusive"
+        reasoning = (
+            "No plausible candidate in this bounded search. Broaden queries and inspect adjacent "
+            "projects before building; this is not proof that nothing exists."
+            if complete
+            else "Search is incomplete and found no reliable match. Retry the failed queries "
+            "before deciding; do not build from this result alone."
+        )
+    elif not closest["license"] or closest["archived"]:
+        recommendation = "borrow parts"
+        reasoning = (
+            "Every plausible match has license or archive concerns. Check permission and "
+            "inspect alternatives before reusing any code."
+        )
+    elif (
+        closest["idea_term_coverage"] >= 0.85
+        and closest["relevance_score"] >= 0.8
+        and closest["stars"] >= 25
+        and (closest.get("days_since_push") is None or closest["days_since_push"] < 365)
+    ):
+        recommendation = "use as is"
+        reasoning = (
+            "Strong metadata overlap and a recognized license. Inspect README and test "
+            "the required behavior before deciding that it works unchanged."
+        )
+    elif closest["idea_term_coverage"] >= 0.85 and closest["relevance_score"] >= 0.8:
+        recommendation = "fork and adapt"
+        reasoning = (
+            "Strong metadata overlap, but adoption or recent activity is too low to "
+            "recommend using it as is. Inspect maintenance, test it, and expect to own it."
+        )
+    else:
+        recommendation = "fork and adapt"
+        reasoning = (
+            "A plausible existing base has a recognized license. Inspect, run its tests "
+            "in isolation, and identify the missing behavior before forking."
+        )
+    if not complete and closest:
+        reasoning += " Evidence is incomplete; retry failed reads before making a decision."
+    return {
+        "closest_match": {"name": closest["name"], "url": closest["url"]} if closest else None,
+        "plausible_candidates": len(plausible),
+        "adjacent_candidates": len(adjacent),
+        "recommendation": recommendation,
+        "reasoning": reasoning,
+        "provisional": True,
+        "search_complete": complete,
+    }

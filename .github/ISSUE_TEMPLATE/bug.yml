@@ -1,0 +1,10 @@
+name: Bug report
+description: Report a reproducible problem with public or synthetic evidence
+body:
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction, expected result and actual result
+      description: Omit tokens, confidential search terms and private repositories.
+    validations:
+      required: true

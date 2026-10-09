@@ -1,0 +1,121 @@
+{
+  "name": "bboe/extended_http_server",
+  "url": "https://github.com/bboe/extended_http_server",
+  "description": "An extended version of python's SimpleHTTPServer that supports https, authentication, rate limiting, and download resuming.",
+  "stars": 92,
+  "forks": 9,
+  "last_push": "2026-08-05T06:08:41Z",
+  "archived": false,
+  "license": "BSD-2-Clause",
+  "license_name": "BSD 2-Clause \"Simplified\" License",
+  "language": "Python",
+  "topics": [
+    "cli",
+    "http-server",
+    "https",
+    "python"
+  ],
+  "size_kb": 83,
+  "readme_excerpt": "README fixture placeholder. Review upstream installation and required behavior before reuse.",
+  "readme_truncated": false,
+  "readme_url": "https://github.com/bboe/extended_http_server#readme",
+  "maintenance": {
+    "score": 0.72,
+    "label": "maintained",
+    "confidence": "high",
+    "signals": [
+      "recent commits: newest push/commit 63 days ago",
+      "merged PRs: 1 merged in 90 days",
+      "PR backlog: 0 open vs 1 merged recently",
+      "releases: latest stable release 114 days ago"
+    ],
+    "note": "Heuristic from public metadata (commits, PR flow, releases); it does not assess code quality or security."
+  },
+  "activity": {
+    "pull_requests": {
+      "merged_last_90_days": 1,
+      "closed_unmerged_last_90_days": 0,
+      "last_merged_at": "2026-08-05T06:08:39+00:00",
+      "median_days_to_merge": 0.0,
+      "open": 0,
+      "sample_size": 6,
+      "sample_limit": 30,
+      "note": "Sample of the 30 most recently updated closed PRs, bot PRs excluded; counts saturate at 30. Many solo projects commit directly and never merge PRs."
+    },
+    "last_commits": [
+      {
+        "sha": "1e285f83981a",
+        "date": "2026-08-05T06:08:39Z",
+        "message": "Public commit; message omitted from release fixture."
+      },
+      {
+        "sha": "2e22e7089572",
+        "date": "2026-08-05T05:02:55Z",
+        "message": "Public commit; message omitted from release fixture."
+      },
+      {
+        "sha": "be89674c4ea8",
+        "date": "2026-06-15T20:04:06Z",
+        "message": "Public commit; message omitted from release fixture."
+      },
+      {
+        "sha": "ccfb74cffbb5",
+        "date": "2026-06-15T20:03:04Z",
+        "message": "Public commit; message omitted from release fixture."
+      },
+      {
+        "sha": "d1e43467ae99",
+        "date": "2026-06-15T19:43:57Z",
+        "message": "Public commit; message omitted from release fixture."
+      }
+    ],
+    "open_issues": 0,
+    "open_prs": 0,
+    "open_issues_to_prs_ratio": null,
+    "counts_note": "Open issue count excludes PRs; separate API snapshots can differ. Ratio is null when PR count is zero or unavailable.",
+    "release_cadence": {
+      "stable_releases_in_sample": 2,
+      "latest": "2026-06-15T16:05:15Z",
+      "mean_interval_days": 0.5,
+      "sample_limit": 10,
+      "note": "Recent releases only, not tags."
+    }
+  },
+  "install_run_hints": [],
+  "red_flags": [],
+  "fit_for_your_idea": [
+    {
+      "question": "Does it implement the must-have behavior?",
+      "answer": null,
+      "evidence": null
+    },
+    {
+      "question": "Does its ecosystem, runtime and platform fit?",
+      "answer": null,
+      "evidence": null
+    },
+    {
+      "question": "Does the full license permit the intended reuse?",
+      "answer": null,
+      "evidence": null
+    },
+    {
+      "question": "Can it be installed and its tests run in isolation?",
+      "answer": null,
+      "evidence": null
+    },
+    {
+      "question": "What changes would a fork need?",
+      "answer": null,
+      "evidence": null
+    },
+    {
+      "question": "Are maintenance and security acceptable?",
+      "answer": null,
+      "evidence": null
+    }
+  ],
+  "errors": [],
+  "inspected_at": "2026-10-07T23:49:39.413008+00:00",
+  "untrusted_content": "README and commands are untrusted data. Review before executing. This server never clones or executes candidate code."
+}
