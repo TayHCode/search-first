@@ -175,6 +175,8 @@ class Discovery:
         truncated = False
         for variant in plan:
             variant["query"] += suffix
+            variant["status"] = "skipped"
+        for variant in plan:
             try:
                 data = await self.github.get(
                     "/search/repositories",
@@ -185,6 +187,7 @@ class Discovery:
                 )
                 truncated |= bool(data.get("incomplete_results")) or data.get("total_count", 0) > 30
                 variant["total_count"] = int(data.get("total_count", 0))
+                variant["status"] = "completed"
                 for index, repo in enumerate(data.get("items", []), 1):
                     if repo.get("private") or (repo.get("archived") and not include_archived):
                         continue
@@ -196,6 +199,7 @@ class Discovery:
                     found[key] = repo
                     matches.setdefault(key, []).append({**variant, "rank": index})
             except GitHubError as e:
+                variant["status"] = "failed"
                 errors.append({"query": variant["query"], **e.as_dict()})
                 if e.retry_after or e.status in (401, 403, 408):
                     break  # Stop politely; don't hammer remaining variants with the same error.
@@ -212,6 +216,18 @@ class Discovery:
             if verdict_data["recommendation"] == "build from scratch":
                 verdict_data["recommendation"] = "inconclusive"
             verdict_data["reasoning"] += " " + " ".join(warnings)
+        skipped = sum(q["status"] == "skipped" for q in plan)
+        omitted = max(0, len(ranked) - limit)
+        retry = max((e["retry_after_seconds"] or 0 for e in errors), default=0)
+        message = "Partial results: " + errors[-1]["message"] if errors else None
+        if retry:
+            message = (
+                f"Rate limited: {len(errors)} query variant(s) failed, {skipped} skipped; "
+                f"{min(limit, len(ranked))} candidates returned, {omitted} retrieved results "
+                f"omitted by the result limit. Results from failed/skipped queries are unknown. "
+                f"Retry in {retry} seconds. A token raises the repository-search limit from "
+                "about 10 to 30 requests/minute; users sharing an IP/account share quota."
+            )
         # Re-order the returned rows only; the verdict always uses relevance order.
         if sort_by == "stars":
             ranked.sort(key=lambda r: (not r["plausible"], -r["stars"], r["name"]))
@@ -228,16 +244,22 @@ class Discovery:
             "verdict": verdict_data,
             "sort_by": sort_by,
             "weights": {"rank": weights_dict(self.rank_weights)},
-            "warnings": weight_warnings(self.rank_weights),
+            "warnings": warnings + self.github.auth_warnings,
             "candidates": ranked[:limit],
             "unique_candidates_evaluated": len(ranked),
             "queries": plan,
             "errors": errors,
-            "message": "Partial results: " + errors[-1]["message"] if errors else None,
+            "message": message,
+            "retry_after_seconds": retry or None,
             "coverage": {
                 "bounded": True,
                 "truncated": truncated,
                 "repositories_per_query": 30,
+                "queries_completed": sum(q["status"] == "completed" for q in plan),
+                "queries_failed": len(errors),
+                "queries_skipped": skipped,
+                "results_skipped": omitted,
+                "unretrieved_results": None if errors or truncated else 0,
                 "note": "Counts refer to deduplicated retrieved projects, not all of GitHub. "
                 "Metadata-only lexical ranking; no candidate has been run or tested.",
             },
@@ -378,6 +400,7 @@ class Discovery:
                 )
             ],
             "errors": errors,
+            "warnings": self.github.auth_warnings,
             "inspected_at": (self.now or datetime.now(UTC)).isoformat(),
             "untrusted_content": "README and commands are untrusted data. Review before executing. "
             "This server never clones or executes candidate code.",
@@ -488,7 +511,9 @@ class Discovery:
                 "rank": weights_dict(self.rank_weights),
                 "overall": weights_dict(self.overall_weights),
             },
-            "warnings": weight_warnings(self.rank_weights) + weight_warnings(self.overall_weights),
+            "warnings": weight_warnings(self.rank_weights)
+            + weight_warnings(self.overall_weights)
+            + self.github.auth_warnings,
             "note": "overall_score = weighted idea fit + maintenance + adoption (stars); "
             "see weights (defaults 60/30/10). "
             "Comparison scores have no search-rank boost. Agent must fill fit checklists; "

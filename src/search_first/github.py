@@ -24,6 +24,27 @@ from . import __version__
 
 API = "https://api.github.com"
 TOKEN_PATTERN = re.compile(r"(?:github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9]+)")
+PLACEHOLDER_NOTICE = "token placeholder not expanded; running unauthenticated"
+
+
+def token_placeholder(value: str) -> bool:
+    """Recognize config references and example values without guessing at real tokens."""
+    value = value.strip()
+    if not value or re.search(
+        r"\$\{[^}]+\}|\$[A-Za-z_][A-Za-z0-9_]*|%[A-Za-z_][A-Za-z0-9_]*%", value
+    ):
+        return True
+    label = re.sub(r"[\s_<>-]+", "-", value.lower()).strip("-")
+    return label in {
+        "your-token",
+        "your-token-here",
+        "your-github-token",
+        "your-github-token-here",
+        "token-here",
+        "insert-token-here",
+        "replace-with-your-token",
+        "replace-me",
+    }
 
 
 class GitHubError(Exception):
@@ -41,9 +62,10 @@ class GitHubError(Exception):
 
 
 def discover_token(use_gh: bool = False) -> str | None:
-    token = os.environ.get("GITHUB_TOKEN", "").strip() or os.environ.get("GH_TOKEN", "").strip()
-    if token:
-        return token
+    for name in ("GITHUB_TOKEN", "GH_TOKEN"):
+        token = os.environ.get(name, "").strip()
+        if not token_placeholder(token):
+            return token
     if use_gh:
         try:
             result = subprocess.run(
@@ -54,7 +76,8 @@ def discover_token(use_gh: bool = False) -> str | None:
                 check=False,
             )
             if result.returncode == 0:
-                return result.stdout.strip() or None
+                token = result.stdout.strip()
+                return None if token_placeholder(token) else token
         except (OSError, subprocess.TimeoutExpired):
             pass
     return None
@@ -173,7 +196,16 @@ class GitHubClient:
         transport: httpx.AsyncBaseTransport | None = None,
         call_timeout: float = 45,
     ):
-        self.token = token
+        placeholder = token is not None and token_placeholder(token)
+        self.token = token.strip() if token is not None and not placeholder else None
+        # discover_token has already removed environment placeholders at startup.
+        env_placeholder = any(
+            name in os.environ and token_placeholder(os.environ[name])
+            for name in ("GITHUB_TOKEN", "GH_TOKEN")
+        )
+        self.auth_warnings = (
+            [PLACEHOLDER_NOTICE] if self.token is None and (placeholder or env_placeholder) else []
+        )
         self.cache = cache
         self.transport = transport
         self.call_timeout = call_timeout
@@ -238,7 +270,7 @@ class GitHubClient:
             remaining = self.cooldown.get(resource, 0) - time.time()
             if remaining > 0:
                 raise GitHubError(
-                    "GitHub rate limit: returning partial results; wait before retrying.",
+                    "GitHub rate limit: returning partial results; a token raises the limit.",
                     retry_after=max(1, math.ceil(remaining)),
                     status=429,
                 )
@@ -248,7 +280,7 @@ class GitHubClient:
                 remaining = self.cooldown.get(resource, 0) - time.time()
                 if remaining > 0:
                     raise GitHubError(
-                        "GitHub rate limit: returning partial results; wait before retrying.",
+                        "GitHub rate limit: returning partial results; a token raises the limit.",
                         retry_after=max(1, math.ceil(remaining)),
                         status=429,
                     )
@@ -306,7 +338,8 @@ class GitHubClient:
                     self.cooldown[resource] = time.time() + delay
                     raise GitHubError(
                         "GitHub rate limit reached; returning partial results. "
-                        "Wait for retry_after_seconds or use GITHUB_TOKEN / GH_TOKEN.",
+                        "Retry after retry_after_seconds; a token raises the repository-search "
+                        "limit from about 10 to 30 requests/minute (shared quotas still apply).",
                         retry_after=delay,
                         status=response.status_code,
                     )

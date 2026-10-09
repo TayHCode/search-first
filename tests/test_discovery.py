@@ -240,7 +240,8 @@ def test_specific_small_product_beats_popular_resource_list():
         [{"terms": "browser", "query": "browser", "rank": 1}],
     )
     assert small["relevance_score"] > large["relevance_score"]
-    assert verdict([small], complete=True)["recommendation"] in {"use as is", "fork and adapt"}
+    # A tiny match beats a resource list but is not a credible fork recommendation.
+    assert verdict([small], complete=True)["recommendation"] == "inconclusive"
 
 
 def test_342_star_near_match_is_not_a_build_from_scratch_verdict(recording):

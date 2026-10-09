@@ -84,6 +84,8 @@ GROUPS = [
     ("schedule", "scheduler", "scheduling", "cron"),
     ("sync", "synchronize", "synchronization", "replicate"),
     ("search", "searcher", "finder", "discovery"),
+    ("documentation", "docs", "doc", "document", "documents"),
+    ("generate", "generator", "generating", "generated", "generation"),
 ]
 NORMAL = {term: group[0] for group in GROUPS for term in group}
 
@@ -121,6 +123,7 @@ def tokens(text: str) -> list[str]:
     out: list[str] = []
     text = re.sub(r"\bcommand[ -]line\b", "terminal", text, flags=re.I)
     text = re.sub(r"\bself[ -]hosted\b", "selfhosted", text, flags=re.I)
+    text = re.sub(r"\bhome[ -]lab\b", "homelab", text, flags=re.I)
     for raw in re.findall(r"[a-z0-9]+(?:-[a-z0-9]+)*", text.lower()):
         parts = raw.split("-")
         for part in [*parts, "".join(parts)] if len(parts) > 1 else parts:
@@ -134,10 +137,21 @@ def tokens(text: str) -> list[str]:
 VAGUE_TERMS = set(
     tokens("life easier easy better faster computer useful helpful productivity helper")
 )
+# Ecosystem/interface qualifiers remain explicit constraints, not core behavior.
+# HTTP/request wording must not demote a dedicated rate-limiting library.
+QUALIFIERS = set(
+    tokens(
+        "http https request requests terminal selfhosted windows macos linux "
+        "program software utility"
+    )
+) | set(tokens(" ".join(LANGUAGES.values())))
+
+MIN_REUSE_STARS = 25
+MAX_REUSE_PUSH_DAYS = 365
 
 
 def key_terms(idea: str) -> set[str]:
-    return set(tokens(idea)) - VAGUE_TERMS
+    return set(tokens(idea)) - VAGUE_TERMS - QUALIFIERS
 
 
 def specific_idea(idea: str) -> bool:
@@ -158,6 +172,12 @@ def missing_constraints(idea: str, text: str) -> list[str]:
     for language in mentioned_languages(idea):
         if language not in text.lower():
             missing.add(language)
+    # Homelab is a broad domain. Evidence about one appliance is not evidence of
+    # general homelab support; keep this small scope check visible and inspectable.
+    if "homelab" in wanted:
+        for product in ("unraid", "proxmox", "truenas"):
+            if re.search(rf"\b{product}\b", text, re.I) and product not in idea.lower():
+                missing.add(f"general homelab support beyond {product}")
     return sorted(missing)
 
 
@@ -175,6 +195,8 @@ def relevance_key(row: dict[str, Any]) -> tuple[Any, ...]:
     # Apply the same plausibility grouping in all presentation orders.
     return (
         not row["plausible"],
+        bool(row.get("missing_key_terms")),
+        bool(row.get("missing_constraints")),
         not is_adjacent(row),
         -row["relevance_score"],
         -row["stars"],
@@ -352,12 +374,12 @@ def rank_repo(
             result["language"] or "",
         ]
     )
-    idea_terms, repo_terms = set(tokens(idea)), set(tokens(text))
+    idea_terms, repo_terms = key_terms(idea), set(tokens(text))
     matched = sorted(idea_terms & repo_terms)
     coverage = len(matched) / max(1, len(idea_terms))
     query_coverage = max(
         (
-            len(set(tokens(m["terms"])) & repo_terms) / max(1, len(tokens(m["terms"])))
+            len(key_terms(m["terms"]) & repo_terms) / max(1, len(key_terms(m["terms"])))
             for m in matches
         ),
         default=0,
@@ -392,6 +414,11 @@ def rank_repo(
     specific = specific_idea(idea)
     missing_keys = sorted(key_terms(idea) - repo_terms)
     hard_missing = missing_constraints(idea, text)
+    credible = result["stars"] >= MIN_REUSE_STARS and age is not None and age < MAX_REUSE_PUSH_DAYS
+    if not credible:
+        penalties.append(
+            "reuse floor unverified: needs at least 25 stars and a push within 365 days"
+        )
     if missing_keys:
         score = min(score, 0.79)
         penalties.append("key terms unverified: " + ", ".join(missing_keys))
@@ -419,18 +446,30 @@ def rank_repo(
             "relevance_score": round(max(0, min(1, score)), 3),
             "days_since_push": age,
             "idea_term_coverage": round(coverage, 3),
-            "missing_idea_terms": sorted(idea_terms - repo_terms),
+            "core_terms": sorted(idea_terms),
+            "core_match": "strong"
+            if specific and not missing_keys
+            else "partial"
+            if matched
+            else "none",
+            "reuse_floor_met": credible,
+            "missing_idea_terms": sorted(set(tokens(idea)) - repo_terms),
             "missing_key_terms": missing_keys,
             "missing_constraints": hard_missing,
             "idea_is_specific": specific,
             "matched_idea_terms": matched,
             "plausible": specific
+            and credible
+            and not missing_keys
             and not hard_missing
             and coverage >= 0.5
             and score >= 0.55
             and len(matched) >= min(2, len(idea_terms)),
             "why_it_matched": (
-                f"Idea terms: {', '.join(matched) or 'no direct overlap'}; "
+                ("Strong core match; " if specific and not missing_keys else "")
+                + f"Core terms: {len(matched)}/{len(idea_terms)} "
+                f"({', '.join(matched) or 'no direct overlap'}); "
+                f"{result['stars']} stars, push {age if age is not None else 'unknown'} days ago; "
                 + (
                     f"returned by {len(matches)} query variant(s), best GitHub rank "
                     f"{min(m['rank'] for m in matches)}."
@@ -476,7 +515,8 @@ def verdict(
     elif not plausible and adjacent:
         recommendation = "inconclusive"
         reasoning = (
-            "Adjacent candidates exist below the lexical plausibility threshold. Inspect "
+            "Core overlap exists, but the reuse floor (25 stars, push within 365 days) "
+            "or lexical plausibility threshold is unverified. Inspect "
             "their README and required behavior, then broaden queries before choosing to "
             "build. A low score does not establish that no reusable base exists."
         )
@@ -498,25 +538,18 @@ def verdict(
     elif (
         closest["idea_term_coverage"] >= 0.85
         and closest["relevance_score"] >= 0.8
-        and closest["stars"] >= 25
-        and (closest.get("days_since_push") is None or closest["days_since_push"] < 365)
+        and closest["reuse_floor_met"]
     ):
         recommendation = "use as is"
         reasoning = (
             "Strong metadata overlap and a recognized license. Inspect README and test "
             "the required behavior before deciding that it works unchanged."
         )
-    elif closest["idea_term_coverage"] >= 0.85 and closest["relevance_score"] >= 0.8:
-        recommendation = "fork and adapt"
-        reasoning = (
-            "Strong metadata overlap, but adoption or recent activity is too low to "
-            "recommend using it as is. Inspect maintenance, test it, and expect to own it."
-        )
     else:
         recommendation = "fork and adapt"
         reasoning = (
-            "A plausible existing base has a recognized license. Inspect, run its tests "
-            "in isolation, and identify the missing behavior before forking."
+            "All core terms and explicit constraints are covered, with at least 25 stars, "
+            "a push within 365 days and a recognized license. Inspect and test before forking."
         )
     if not complete:
         reasoning += " Evidence is incomplete; retry failed reads before making a decision."

@@ -85,9 +85,9 @@ def ranked(stars: int, pushed_days: int) -> dict[str, object]:
 def test_use_as_is_requires_adoption_and_recent_activity():
     assert verdict([ranked(500, 10)], complete=True)["recommendation"] == "use as is"
     low_stars = verdict([ranked(3, 10)], complete=True)
-    assert low_stars["recommendation"] == "fork and adapt"
-    assert "adoption" in low_stars["reasoning"]
-    assert verdict([ranked(500, 900)], complete=True)["recommendation"] == "fork and adapt"
+    assert low_stars["recommendation"] == "inconclusive"
+    assert "25 stars" in low_stars["reasoning"]
+    assert verdict([ranked(500, 900)], complete=True)["recommendation"] == "inconclusive"
 
 
 async def test_search_sort_by_stars_and_validation():
@@ -112,7 +112,11 @@ async def test_search_sort_by_stars_and_validation():
     stars = await discovery.search_existing(idea, sort_by="stars")
     assert [r["name"] for r in stars["candidates"]][0] == "example/big-old"
     recent = await discovery.search_existing(idea, sort_by="recent_activity")
-    assert [r["name"] for r in recent["candidates"]][0] == "example/small-new"
+    assert [r["name"] for r in recent["candidates"]] == [
+        "example/mid",
+        "example/big-old",
+        "example/small-new",
+    ]
     with pytest.raises(ValueError):
         await discovery.search_existing(idea, sort_by="vibes")
 

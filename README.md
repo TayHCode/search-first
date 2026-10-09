@@ -10,6 +10,23 @@ only after a broader search fails to find a suitable base.
 Version 0.1, MIT licensed. It is not yet published as a package or a hosted service,
 and the project and distribution (`search-first-mcp`) names may still change.
 
+**Use a GitHub token for regular use.** Without one, the 10 search requests/minute
+per public IP usually buy only **about 2 idea queries/minute**, and fewer when other
+machines share that IP. Authentication raises repository search to 30 requests/minute.
+
+Create a read-only fine-grained token in three steps:
+
+1. Open GitHub **Settings → Developer settings → Personal access tokens →
+   Fine-grained tokens → Generate new token**.
+2. Name it, set an expiration, select your account as resource owner and **Public
+   repositories** as repository access. Leave optional permissions unset: tokens
+   already include read-only access to public repositories.
+3. Generate it and supply it as `GITHUB_TOKEN` through your secret manager or the
+   environment of the process launching the server. Keep it out of tracked files.
+
+See [GitHub's token guide](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens).
+No token is needed for `--help` or the fixture tests.
+
 ## Install and run
 
 The minimum is **Python 3.11** (the server uses Python 3.11's `asyncio.timeout`
@@ -82,13 +99,17 @@ in place of `.` (quote it in PowerShell too); see "Proof and development" below.
 The server does **not** call a model or require model credentials. Your calling agent
 provides query variants, judges functional fit, and controls any subsequent work.
 
-### GitHub limits and optional authentication
+### GitHub limits and authentication
 
 The server reads `GITHUB_TOKEN`, then `GH_TOKEN`, from its process environment.
 If neither is set, `--use-gh-token` explicitly opts in to `gh auth token`;
 the CLI fallback is off by default. Credentials are never included in tool responses,
-logs or cache files. Never pass a token as a command argument or put its value in
-tracked configuration.
+logs or cache files. Prefer inherited environment or a secret manager; keep any
+credential-bearing client configuration untracked. Empty values, unexpanded
+`${VAR}`, `$VAR` or `%VAR%` references and example values such as `your-token-here`
+are ignored. If no usable token remains, each tool response says once:
+`token placeholder not expanded; running unauthenticated`. A real but invalid
+credential still returns an authentication error; it is not silently ignored.
 
 GitHub's [repository search limits](https://docs.github.com/en/rest/search/search#rate-limit)
 are about **10 requests/minute per IP without authentication** and **30/minute with
@@ -97,6 +118,12 @@ authentication**. Other users sharing an IP or account spend the same budget.
 are **60/hour per IP** unauthenticated and generally **5,000/hour per authenticated user**;
 GitHub Actions tokens and some app/enterprise credentials have different limits.
 Secondary limits can also apply.
+
+**Queries per minute:** an idea search with 3–5 executed variants consumes 3–5
+requests, giving roughly 2–3 idea queries/minute without a token or 6–10 with one.
+On a shared public IP, budget about 2 unauthenticated idea queries/minute across all
+machines, not per machine. Six searches back to back can exhaust that budget.
+These are planning estimates, not guarantees; cache hits are free.
 
 An uncached `search_existing` costs one search request per executed variant:
 normally your 2–6 distinct variants plus one derived variant (up to 7); with fewer
@@ -109,37 +136,23 @@ variants to conserve quota.
 Uncached search requests are paced at least 6.1 seconds apart without a token,
 or 2.1 seconds with one. GitHub quota/reset and `Retry-After` headers trigger a
 cooldown; the server returns **partial results**, a clear error and
-`retry_after_seconds` rather than waiting a full rate-limit window. Retry after that
-interval. A total **45-second deadline per tool call** includes all variants,
+`retry_after_seconds` rather than waiting a full rate-limit window. The response
+reports completed, failed and skipped query counts, how many retrieved results the
+result limit omitted, and retry seconds, and reminds you that a token raises the
+limit. Results from queries that could not run are unknown, not fabricated counts.
+Retry the idea after that interval. A total **45-second deadline per tool call** includes all variants,
 inspections, queueing and pacing; individual requests are also bounded at 20 seconds.
 Use `--call-timeout SECONDS` (1–120) to change the total. Timeout results are
 incomplete: narrow the query and retry; never treat them as proof that nothing exists.
 
-To create a minimal token, open GitHub Settings → Developer settings → Personal
-access tokens → Fine-grained tokens → Generate new token. Set an expiration, choose
-**Public repositories** for repository access, and leave optional permissions unset.
-Fine-grained tokens include read-only public access; they use permissions, not
-classic token scopes. These public endpoints need no extra permissions. See
-[GitHub's token guide](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens).
-Supply the token through your secret manager or the launching process environment.
-
-Claude Code supports environment expansion in `.mcp.json`. This `env` block stores
-only a reference, never the token's value (the variable must be set before launching):
-
-```json
-{
-  "mcpServers": {
-    "search-first": {
-      "command": "uvx",
-      "args": ["--python", "3.12", "--from", "/absolute/path/search-first", "search-first"],
-      "env": {"GITHUB_TOKEN": "${GITHUB_TOKEN}"}
-    }
-  }
-}
-```
-
-Other clients may not expand `${GITHUB_TOKEN}`; consult their documentation and
-prefer inherited environment or a secret manager instead of writing the value to disk.
+Token creation is described above. For Claude Code, use the explicit `-e` command
+in the client section or inherit `GITHUB_TOKEN` from the launching environment.
+For JSON-based clients, an `env` block must contain the **actual value**, supplied
+locally, or omit `GITHUB_TOKEN` entirely. Do not paste `${GITHUB_TOKEN}` into a generic
+JSON config: expansion is client-specific, and Claude Code leaves an unset reference
+literal. The headless example below has **no env block**; it works without a token,
+or with a token inherited by the client. GUI clients often need an explicit local
+value because they do not inherit your terminal environment.
 
 Only public repositories are returned; inspecting private metadata is refused.
 GitHub receives your search terms. Do not include confidential requirements or secrets.
@@ -189,8 +202,11 @@ orders the returned rows: `relevance` (default), `stars`, or `recent_activity`
 The verdict always uses relevance order: `closest_match`, when present, is the
 first row of the relevance shortlist, including its license/archive caveats. With
 `stars` or `recent_activity`, that same match may appear later. Missing key terms
-or hard constraints prevent `use as is` and `fork and adapt`. `use as is` additionally requires at least 25 stars and a push
-within a year; a strong match with less adoption is reported as `fork and adapt`.
+or hard constraints prevent `use as is` and `fork and adapt`. Both also require
+at least **25 stars and a known push within 365 days**. A tiny or stale full match
+can remain an inspection lead with `inconclusive`, not an automatic fork verdict.
+Core coverage and these floors take priority over the weighted score in relevance
+ordering, so a maintained dedicated library outranks a tiny CLI with generic overlap.
 
 Each candidate includes name, URL, description, stars, forks, last push, archived
 flag, SPDX license identifier, language, topics, size, a 0–1 relevance score,
@@ -309,13 +325,42 @@ Claude Code, from your project directory (quote paths that contain spaces):
 claude mcp add --transport stdio --scope project search-first -- uvx --python 3.12 --from "/absolute/path/search-first" search-first
 ```
 
+For a token already set in your environment, Claude Code can write its **expanded
+value** into the local config (keep that credential-bearing file untracked):
+
+```sh
+claude mcp add -e "GITHUB_TOKEN=$GITHUB_TOKEN" --transport stdio --scope project search-first -- uvx --python 3.12 --from "/absolute/path/search-first" search-first
+```
+
+PowerShell uses `-e "GITHUB_TOKEN=$env:GITHUB_TOKEN"` instead. Run one registration
+command, not both. With no token, use the first command without `-e`; omit the token
+key rather than inserting an environment reference or example value.
+
 This writes `.mcp.json` in that project. Project-scoped servers need approval:
 start **interactive** `claude` in the project, approve the server when prompted,
 and use `/mcp` to inspect its status. Server approval and permission to call tools
 are separate. A healthy server alone does not grant headless tool permission.
 
-For a headless session, save the JSON below as `search-first.mcp.json` with your
-actual absolute paths, then explicitly allow these read-only tools:
+For a headless session, save **this server JSON** as `search-first.mcp.json` with
+your actual absolute paths. It deliberately omits `env` and inherits the client's
+environment. If you have no token, leave it as written; no token key is required.
+For a client that cannot inherit environment, add `"env": {"GITHUB_TOKEN":
+"REPLACE_WITH_YOUR_TOKEN"}` to the server object and replace that example value with
+your real token locally. Keep that file untracked; JSON is not a shell.
+
+```json
+{
+  "mcpServers": {
+    "search-first": {
+      "command": "uvx",
+      "args": ["--python", "3.12", "--from", "/absolute/path/search-first", "search-first"]
+    }
+  }
+}
+```
+
+Use the absolute path to `uvx` if the client cannot find it on PATH. Then explicitly
+allow these read-only tools:
 
 ```sh
 claude -p "Call search_existing for a terminal tool to close idle chrome tabs, using variants chrome idle tabs and CLI close inactive tabs. Report missing constraints." --mcp-config search-first.mcp.json --strict-mcp-config --allowedTools "mcp__search-first__search_existing" "mcp__search-first__inspect_repo" "mcp__search-first__compare_candidates"
@@ -437,22 +482,28 @@ maintenance checks and an explicit reuse-before-build workflow. No code is copie
 from that server. The SDK's real transports are exercised by the protocol tests;
 upstream servers and candidates have not been installed or functionally tested.
 
-By default, score = 50% normalized idea-term coverage + 17% best query-term coverage +
-8% best GitHub result rank + 4% agreement across variants + 5% freshness + 16%
-logarithmic stars (the weights are settable, see below). Terms come from name, description, topics and primary language; hyphenated
-topics are split and a tiny suffix stripper equates limit/limiter/limiting. If the idea
-names a language (for example Python) a repo in another language is penalized. Archive, unconfirmed-license and resource-list/tutorial penalties apply.
-A small synonym vocabulary maps words such as idle/inactive and terminal/TUI/CLI.
-A plausible candidate needs a specific idea, no missing hard constraints, at least
-50% idea-term coverage, two matched terms and a score ≥0.55. Missing key terms
-cap the score below 0.8; missing hard constraints cap it below 0.55. Explicit
-constraints include terminal/CLI/command line, requested language, named operating
-system, Chrome/Chromium and self-hosted. The response surfaces `missing_key_terms`
-and `missing_constraints`; missing metadata evidence is not proof of impossibility.
-A reuse/fork verdict needs all normalized key terms covered. Generic aspirations
-("life easier", "computer faster") yield `inconclusive`, even with popular hits. The server always runs one derived whole-idea variant. If you pass two or
-more variants it skips its extra derived variants (two-word, trailing-words and topic
-searches) to save search quota.
+By default, score = 50% normalized **core-term** coverage + 17% best core query-term
+coverage + 8% best GitHub result rank + 4% agreement across variants + 5% freshness +
+16% logarithmic stars (the weights are settable, see below). Terms come from name,
+description, topics and primary language. A small suffix/synonym vocabulary equates
+limit/limiter/limiting, idle/inactive, docs/documentation and generate/generator.
+Generic wording (`tool`, `HTTP`, `requests`, `Python`, `terminal`) is not a missing
+core term. Ecosystem qualifiers still matter as explicit constraints: terminal/CLI,
+requested language, operating system, Chrome/Chromium and self-hosted must have
+metadata evidence. A homelab idea also flags Unraid/Proxmox/TrueNAS-only wording as
+unverified general scope. These small rules do not infer behavior from a README.
+
+A plausible reusable base needs a specific idea, **all core terms**, no missing hard
+constraints, at least 25 stars, a known push within 365 days and score ≥0.55. Missing
+core terms cap the score below 0.8; missing constraints cap it below 0.55. Full,
+credible matches sort before tiny matches and partial matches, regardless of raw
+weighted score. `core_terms`, `missing_key_terms`, `missing_constraints`,
+`reuse_floor_met` and the one-line `why_it_matched` explain the decision. All reuse
+verdicts remain provisional; recent pushes and stars are weak maintenance signals.
+Generic aspirations ("life easier", "computer faster") yield `inconclusive`, even
+with popular hits. The server always runs one derived whole-idea variant. If you
+pass two or more variants it skips extra derived variants to save search quota.
+
 Candidates below that threshold with at least two matched idea terms, 25% coverage
 and score ≥0.3 are counted as **adjacent**. If none is plausible but an adjacent
 candidate exists, the verdict is `inconclusive` and includes the closest adjacent
@@ -484,7 +535,8 @@ has no search-rank evidence, only `idea_match`, `freshness` and `stars` count an
 are rescaled by their sum (so a perfect repo can still reach 1.0). The overall weights
 blend `relevance_score`, `maintenance` (0.5 when unknown) and stars into
 `overall_score`. Language, archived, license and resource-list penalties are fixed.
-Responses carry a `weights` object with the weights actually in use. A signal
+The cache stores raw public results; weights apply at response time, so a cache hit
+can be reranked without another GitHub request. Responses carry a `weights` object with the weights actually in use. A signal
 with at least 90% of the normalized weight also adds a clear response warning.
 For example `stars=1000000` nearly removes all fit signals and can produce an
 unrelated order; it remains valid, but is unsuitable for judging functional fit.
@@ -496,8 +548,9 @@ The stars term is `log10(1 + stars) / 4`, capped at 1:
 | --- | --- | --- | --- | --- | --- |
 | Stars score | 0 | 0.26 | 0.50 | 0.75 | 1.0 |
 
-The plausibility threshold (score ≥0.55) is fixed and applies to the re-weighted score.
-Changing weights therefore changes how many candidates count as plausible: raising
+The plausibility threshold (score ≥0.55), core coverage, explicit constraints and
+reuse floors are fixed and apply alongside the re-weighted score. Changing weights
+can still change how many eligible candidates count as plausible: raising
 `stars` can shrink that count sharply, and lowering `stars` and `freshness` can enlarge
 it. Compare plausible counts only between runs that use the same weights.
 
