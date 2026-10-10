@@ -206,7 +206,7 @@ entries are pruned at startup and replaced when reused.
 The `idea` must contain **1–2000 characters** and name concrete behavior and a domain.
 Vague aspirations such as "something to make my life easier" yield `inconclusive`.
 
-Pass **3 to 6 short query variants**: synonyms, different framings, ecosystem terms.
+Pass **2 to 6 short query variants**: synonyms, different framings, ecosystem terms.
 Queries are plain terms, optionally quoted, not GitHub qualifiers. The server always
 adds one idea-derived variant (the first four meaningful words of the idea). If you pass
 fewer than two variants it adds up to three more, including a repository-topic search. It queries
@@ -532,7 +532,7 @@ in descriptions or topics verifies an interface constraint; Python alone does no
 If every candidate in the top relevance group lacks that evidence, the verdict
 says none of these is a terminal tool according to retrieved metadata; inspect before inferring support.
 Generic aspirations ("life easier", "computer faster") yield `inconclusive` and
-omit unrelated candidate rows, even with popular hits. The server always runs one derived whole-idea variant. If you
+omit unrelated candidate rows, even with popular hits. The server plans one derived whole-idea variant; the request budget decides whether it runs. If you
 pass two or more variants it skips extra derived variants to save search quota.
 
 Candidates below that threshold with at least two matched idea terms, 25% coverage
