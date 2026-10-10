@@ -19,8 +19,11 @@ def isolated(monkeypatch, tmp_path):
     # Fake HTTP tests spend no wall-clock time on pacing; dedicated tests restore it.
     from search_first.github import GitHubClient
 
-    monkeypatch.setattr(GitHubClient, "SEARCH_INTERVAL_UNAUTH", 0)
-    monkeypatch.setattr(GitHubClient, "SEARCH_INTERVAL_AUTH", 0)
+    monkeypatch.setattr(GitHubClient, "SEARCH_SPACING_ANONYMOUS", 0)
+    monkeypatch.setattr(GitHubClient, "SEARCH_SPACING_SIGNED_IN", 0)
+    # Legacy full-plan fixtures exercise all variants; budget tests restore production values.
+    monkeypatch.setattr(GitHubClient, "SEARCH_VARIANTS_ANONYMOUS", 7)
+    monkeypatch.setattr(GitHubClient, "SEARCH_VARIANTS_SIGNED_IN", 7)
     original = socket.socket.connect
 
     def connect(sock, address):

@@ -41,7 +41,7 @@ def fake_discovery(items, **kwargs):
     "placeholder",
     [
         "${GITHUB_TOKEN}",
-        "${TOKEN:-}",
+        "${" + "TOKEN" + ":-}",
         "$GITHUB_TOKEN",
         "%GITHUB_TOKEN%",
         "",

@@ -235,7 +235,8 @@ def explain_ties(ranked: list[dict[str, Any]]) -> None:
     for peers in groups.values():
         if len(peers) < 2:
             continue
-        winner, runner_up = sorted(peers, key=tie_key)[:2]
+        ordered = sorted(peers, key=tie_key)
+        winner, runner_up = ordered[:2]
         criterion = next(
             (
                 label
@@ -394,7 +395,7 @@ def repo_summary(repo: dict[str, Any]) -> dict[str, Any]:
     return {
         "name": repo["full_name"],
         "url": repo["html_url"],
-        "description": repo.get("description"),
+        "description": (repo.get("description") or "")[:300] or None,
         "stars": repo.get("stargazers_count", 0),
         "forks": repo.get("forks_count", 0),
         "last_push": repo.get("pushed_at"),
@@ -402,7 +403,7 @@ def repo_summary(repo: dict[str, Any]) -> dict[str, Any]:
         "license": license_id if license_id and license_id != "NOASSERTION" else None,
         "license_name": license_data.get("name"),
         "language": repo.get("language"),
-        "topics": repo.get("topics", []),
+        "topics": [str(topic)[:100] for topic in (repo.get("topics") or [])[:10]],
         "size_kb": repo.get("size", 0),
     }
 

@@ -98,12 +98,54 @@
       "fingerprint": "8d5ae57844b54ba2",
       "scope": "history",
       "reason": "Verified public GitHub login digits in a repository name and its matching GitHub URL, not a telephone number."
+    },
+    {
+      "kind": "home-path",
+      "path": "README.md",
+      "fingerprint": "322f8b438d047bd8",
+      "scope": "tree",
+      "reason": "Read the macOS and Windows client JSON examples: your-name is an explicit placeholder, not a private home directory."
+    },
+    {
+      "kind": "home-path",
+      "path": "README.md",
+      "fingerprint": "322f8b438d047bd8",
+      "scope": "history",
+      "reason": "Read the macOS and Windows client JSON examples: your-name is an explicit placeholder, not a private home directory."
+    },
+    {
+      "kind": "home-path",
+      "path": "README.md",
+      "fingerprint": "43aae39149c2d2d1",
+      "scope": "tree",
+      "reason": "Read the macOS and Windows client JSON examples: your-name is an explicit placeholder, not a private home directory."
+    },
+    {
+      "kind": "home-path",
+      "path": "README.md",
+      "fingerprint": "43aae39149c2d2d1",
+      "scope": "history",
+      "reason": "Read the macOS and Windows client JSON examples: your-name is an explicit placeholder, not a private home directory."
+    },
+    {
+      "kind": "ipv6",
+      "path": "src/search_first/server.py",
+      "fingerprint": "eff8e7ca506627fe",
+      "scope": "tree",
+      "reason": "Read the bind, Host and Origin defaults: IPv6 loopback is public documentation and local transport configuration."
+    },
+    {
+      "kind": "ipv6",
+      "path": "src/search_first/server.py",
+      "fingerprint": "eff8e7ca506627fe",
+      "scope": "history",
+      "reason": "Read the bind, Host and Origin defaults: IPv6 loopback is public documentation and local transport configuration."
     }
   ],
   "quickstart": [
     {
       "file": "README.md",
-      "line": 38,
+      "line": 648,
       "argv": [
         "python",
         "-m",
@@ -114,7 +156,7 @@
     },
     {
       "file": "README.md",
-      "line": 39,
+      "line": 80,
       "argv": [
         "search-first",
         "--help"

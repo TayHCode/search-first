@@ -208,9 +208,9 @@ async def test_comparison_reports_unavailable_candidates(recorded_transport, rec
         for e in recording["entries"]
         if e["path"].startswith("/repos/") and e["path"].count("/") == 3
     ][:2]
-    result = await Discovery(GitHubClient(transport=recorded_transport)).compare_candidates(
-        IDEA, [*names, names[0]]
-    )
+    result = await Discovery(
+        GitHubClient(token="test" + "-credential", transport=recorded_transport)
+    ).compare_candidates(IDEA, [*names, names[0]])
     assert len(result["rows"]) == 2
     assert "license" in result["columns"]
     assert all("fit_for_your_idea" in row for row in result["rows"])

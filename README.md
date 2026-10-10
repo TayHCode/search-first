@@ -9,12 +9,12 @@ only after a broader search fails to find a suitable base.
 
 Version 0.1, MIT licensed. It is not yet published as a package or a hosted service,
 and the project and distribution (`search-first-mcp`) names may still change.
-The source clone URL below is the intended public destination; it cannot supply
-this unpublished revision. Use a supplied local checkout until source publication.
+The source URL below supplies public main. For an unpublished update, use the
+supplied checkout or clone its bundle with `git clone -b BRANCH BUNDLE search-first`.
 
 **Use a GitHub token for regular use.** Without one, the 10 search requests/minute
-per public IP usually buy only **about 2 idea queries/minute**, and fewer when other
-machines share that IP. Authentication raises repository search to 30 requests/minute.
+per public IP support at most **5 bounded idea searches/minute** at two variants
+each; space realistic searches at least 60 seconds apart on a shared IP. Authentication raises repository search to 30 requests/minute.
 
 Create a read-only fine-grained token in three steps:
 
@@ -26,8 +26,8 @@ Create a read-only fine-grained token in three steps:
 3. Generate it and supply it as `GITHUB_TOKEN` through your secret manager or the
    environment of the process launching the server. Keep it out of tracked files.
 
-See [GitHub's token guide](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens).
-No token is needed for `--help` or the fixture tests.
+See [GitHub's authentication guide](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens).
+`--help` and fixture tests work without authentication.
 
 ## Install and run
 
@@ -40,11 +40,14 @@ or needing administrator access. Install [uv using its official installer](https
 - macOS: `curl -LsSf https://astral.sh/uv/install.sh | sh`
 - Windows PowerShell: `powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"`
 
+The Unix installer defaults to `~/.local/bin`. On shared or sandboxed machines,
+choose your own folder: `curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR="$PWD/uv-bin" UV_NO_MODIFY_PATH=1 sh`.
+
 Open a new terminal so `uv` and `uvx` are on PATH. Until a package is published,
 clone the source and run it locally (these commands also work in PowerShell):
 
 ```sh
-git clone https://github.com/TayHCode/search-first.git
+git clone -b main https://github.com/TayHCode/search-first.git
 cd search-first
 uvx --python 3.12 --from . search-first --help
 uvx --python 3.12 --from . search-first
@@ -109,9 +112,10 @@ the CLI fallback is off by default. Credentials are never included in tool respo
 logs or cache files. Prefer inherited environment or a secret manager; keep any
 credential-bearing client configuration untracked. Empty values, unexpanded
 `${VAR}`, `$VAR` or `%VAR%` references and example values such as `your-token-here`
-are ignored. If no usable token remains, each successful tool response includes
-this note once in `warnings` (the `message` field is used for failures):
-`token placeholder not expanded; running unauthenticated`. A real but invalid
+are ignored. Every unauthenticated response includes a `notes` entry explaining
+the two-variant budget and saying `set GITHUB_TOKEN for complete searches`.
+Ignored placeholders additionally produce `token placeholder not expanded; running
+unauthenticated` in `warnings`. A real but invalid
 credential still returns an authentication error; it is not silently ignored.
 
 GitHub's [repository search limits](https://docs.github.com/en/rest/search/search#rate-limit)
@@ -122,39 +126,41 @@ are **60/hour per IP** unauthenticated and generally **5,000/hour per authentica
 GitHub Actions tokens and some app/enterprise credentials have different limits.
 Secondary limits can also apply.
 
-**Queries per minute:** an idea search with 3–5 executed variants consumes 3–5
-requests, giving roughly 2–3 idea queries/minute without a token or 6–10 with one.
-On a shared public IP, budget about 2 unauthenticated idea queries/minute across all
-machines, not per machine. Six searches back to back can exhaust that budget.
-These are planning estimates, not guarantees; cache hits are free.
+**Request budgets:** unauthenticated search executes at most **2 variants** per
+call; authenticated search executes at most **6**. The first supplied variants take
+priority. Known remaining quota can reduce the plan further. Extra planned variants
+are skipped deliberately to conserve quota; `coverage` reports completed, failed,
+skipped and the selected query budget. `detail=true` also returns each query and its
+status. `search_complete` means all selected variants completed, without a GitHub
+incomplete-results flag; it never means an exhaustive search of every variant or
+all of GitHub. Set `GITHUB_TOKEN` to search more variants. Space unauthenticated idea
+calls at least 60 seconds apart, especially when other machines share your IP.
 
-An uncached `search_existing` costs one search request per executed variant:
-normally your 2–6 distinct variants plus one derived variant (up to 7); with fewer
-variants the planner fills in extra queries (up to 5 total). The returned `queries`
-shows the plan. `inspect_repo` costs up to **6 core requests**, and
-`compare_candidates` up to **6 per unique repo** (maximum 36). Cache hits cost zero;
-failures, quota limits and the deadline may stop a call early. Try two precise
-variants to conserve quota.
+Cache hits are free. One uncached variant consumes one search request. Per-call
+network budgets are **6 requests without a token**, **36 with one**, including
+optional reads. `inspect_repo` uses up to 6 core requests and `compare_candidates`
+up to 6 per unique repo; an unauthenticated comparison may be partial. Core quotas
+are distinct from search quotas. Six rapid searches can exhaust a shared search
+budget; these estimates are not guarantees.
 
 Uncached search requests are paced at least 6.1 seconds apart without a token,
-or 2.1 seconds with one. GitHub quota/reset and `Retry-After` headers trigger a
-cooldown; when at least one query completed, the server returns **partial results**
-and `retry_after_seconds` rather than waiting a full rate-limit window. If zero
-queries completed, MCP returns an actual tool error: **No search completed:
-GitHub unreachable/rate limited; nothing to show**, with the cause and retry hint.
-A network failure stops the remaining variants immediately. The response
-reports completed, failed and skipped query counts, how many retrieved results the
-result limit omitted, and retry seconds, and reminds you that a token raises the
-limit. Results from queries that could not run are unknown, not fabricated counts.
-Retry the idea after that interval. A total **15-second deadline per tool call**
-includes all variants, inspections, queueing and pacing; each request uses the
-remaining budget, capped at 20 seconds. Use `--call-timeout SECONDS` (1–120) to
-change the total. Without a token, four uncached variants need over 18 seconds
-just for pacing: use a token, cached queries, or a longer explicit timeout to
-complete that plan. Timeout and GitHub-incomplete results always yield
-`inconclusive`, even with an excellent retrieved match. Retry before choosing to
-use, fork, borrow or build. A bounded sample with more than 30 matches per query
-is truncated, but is not itself a failed or GitHub-incomplete search.
+or 2.1 seconds with one. Quota/reset and `Retry-After` headers trigger cooldown.
+When at least one query completed, failures return partial results and
+`retry_after_seconds`. Zero completed queries return an MCP tool error starting
+**No search completed:** followed by the cause. A connection refusal, unreachable
+network, DNS failure or connection timeout says **GitHub unreachable from this
+machine: check network/proxy** and stops the plan; the connection timeout is 2.5
+seconds. Rate limiting says **rate limited; retry in N s; a token raises the limit**.
+A connected but slow server instead reports a request timeout. Transport details
+and proxy credentials are never returned.
+
+The total deadline is **30 seconds unauthenticated**, **15 seconds with a token**;
+it includes queueing, pacing and all reads. Individual response reads are capped
+at 20 seconds. Override it with `--call-timeout SECONDS` (1–120). Timeout, failed
+queries and GitHub-incomplete results always yield `inconclusive`, even with an
+excellent match. Retry before choosing to use, fork, borrow or build. A vague idea
+can still return a zero-completed error during cooldown. More than 30 matches per
+query means the bounded sample is truncated, not that an executed query failed.
 
 Token creation is described above. For Claude Code, use the explicit `-e` command
 in the client section or inherit `GITHUB_TOKEN` from the launching environment.
@@ -192,7 +198,7 @@ entries are pruned at startup and replaced when reused.
   "language": null,
   "min_stars": 0,
   "include_archived": false,
-  "limit": 15,
+  "limit": 8,
   "sort_by": "relevance"
 }
 ```
@@ -220,13 +226,17 @@ can remain an inspection lead with `inconclusive`, not an automatic fork verdict
 Core coverage and these floors take priority over the weighted score in relevance
 ordering, so a maintained dedicated library outranks a tiny CLI with generic overlap.
 
-Each candidate includes name, URL, description, stars, forks, last push, archived
-flag, SPDX license identifier, language, topics, size, a 0–1 relevance score,
-matched queries, missing idea terms and a plain explanation. `verdict` contains
-`closest_match`, `plausible_candidates`, one of `use as is`, `fork and adapt`,
-`borrow parts`, `build from scratch`, `inconclusive`, and reasoning. All recommendations are
-provisional. Plausible counts describe the retrieved sample, not an exhaustive
-GitHub census. Errors and truncation are explicit.
+The default response returns the top **8** candidates with name, URL, stars, last
+push, license, relevance, idea-term coverage, missing core terms/constraints and a
+one-line reason. It also includes the provisional verdict, completion counts,
+errors and token/quota notes. Typical default responses target under 8,000
+characters. Set `detail=true` for descriptions, topics, ranking evidence, weights
+and query plans; `limit` (1–50) controls returned rows. Every free-text field is
+bounded: descriptions at 300 characters, topics at 10 entries (100 characters
+each), README excerpts and reasoning at 500 characters, other text at 300.
+`verdict` includes `closest_match`, plausible counts, `search_complete`, reasoning
+and one of `use as is`, `fork and adapt`, `borrow parts`, `build from scratch` or
+`inconclusive`. Counts describe the retrieved sample. Inspect and test candidates.
 
 An abbreviated **real recorded result**, not invented example data:
 
@@ -272,7 +282,7 @@ upstream project's README says.
 {"repo": "maverick-360/vaultab"}
 ```
 
-Accepts `owner/repo` or `https://github.com/owner/repo`. Returns an 8,000-character
+Accepts `owner/repo` or `https://github.com/owner/repo`. Returns a 500-character
 README excerpt, SPDX license/name, size in KB, up to five last commits, open issue
 and PR counts and their ratio, cadence of stable releases in the last ten GitHub
 releases, README install/run hints, and heuristic red flags: archived, possibly
@@ -557,7 +567,7 @@ are rescaled by their sum (so a perfect repo can still reach 1.0). The overall w
 blend `relevance_score`, `maintenance` (0.5 when unknown) and stars into
 `overall_score`. Language, archived, license and resource-list penalties are fixed.
 The cache stores raw public results; weights apply at response time, so a cache hit
-can be reranked without another GitHub request. Responses carry a `weights` object with the weights actually in use. A signal
+can be reranked without another GitHub request. Detailed search and comparison responses carry a `weights` object with the weights actually in use. A signal
 with at least 90% of the normalized weight also adds a clear response warning.
 For example `stars=1000000` nearly removes all fit signals and can produce an
 unrelated order; it remains valid, but is unsuitable for judging functional fit.
@@ -630,6 +640,13 @@ uv run --locked ruff check .
 uv run --locked ruff format --check .
 uv run --locked mypy
 uv run --locked python -m build
+```
+
+For pip-based development and release checks in a fresh virtual environment:
+
+```sh
+python -m pip install '.[dev]'
+search-first --help
 ```
 
 All automated tests use recorded public fixtures or synthetic responses; external

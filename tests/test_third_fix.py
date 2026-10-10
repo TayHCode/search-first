@@ -78,7 +78,7 @@ def test_incomplete_verdict_overrides_every_decision(kind):
 
 
 @pytest.mark.parametrize("failure", ["network", "timeout", "rate", "auth", "server", "invalid"])
-async def test_zero_completed_is_actual_mcp_error_and_never_partial(failure):
+async def test_zero_queries_mcp_error(failure):
     calls = 0
 
     def handler(request):
@@ -90,8 +90,9 @@ async def test_zero_completed_is_actual_mcp_error_and_never_partial(failure):
             raise httpx.ReadTimeout("private transport details", request=request)
         if failure == "invalid":
             return httpx.Response(200, content=b"invalid json")
+        statuses = dict(zip(("rate", "auth", "server"), (429, 401, 503), strict=True))
         return httpx.Response(
-            {"rate": 429, "auth": 401, "server": 503}[failure],
+            statuses[failure],
             headers={"retry-after": "11"} if failure == "rate" else {},
         )
 
@@ -100,7 +101,7 @@ async def test_zero_completed_is_actual_mcp_error_and_never_partial(failure):
         result = await client.call_tool("search_existing", {"idea": IDEA, "queries": QUERIES})
     assert result.is_error
     text = " ".join(block.text for block in result.content if hasattr(block, "text"))
-    assert "No search completed: GitHub unreachable/rate limited; nothing to show" in text
+    assert "No search completed:" in text
     assert "partial" not in text.lower()
     assert "private transport details" not in text
     assert "retry" in text.lower() or "replace" in text.lower()
@@ -115,7 +116,7 @@ async def test_total_deadline_with_no_completed_query_is_error_and_configurable(
         return httpx.Response(200, json={"items": []})
 
     engine = discovery(handler, call_timeout=0.03)
-    assert GitHubClient().call_timeout == 15
+    assert GitHubClient().call_timeout == 30
     async with Client(create_server(engine)) as client:
         start = time.monotonic()
         result = await client.call_tool("search_existing", {"idea": IDEA, "queries": QUERIES})

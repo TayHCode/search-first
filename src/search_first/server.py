@@ -48,12 +48,15 @@ def create_server(discovery: Discovery) -> MCPServer:
         language: str | None = None,
         min_stars: int = 0,
         include_archived: bool = False,
-        limit: int = 15,
+        limit: int = 8,
         sort_by: Literal["relevance", "stars", "recent_activity"] = "relevance",
+        detail: bool = False,
     ) -> dict[str, Any]:
         """Before building, find existing public GitHub projects for your idea.
 
-        Pass 3 to 6 query variants: synonyms, different framings, and ecosystem terms.
+        Default: compact top 8 rows. Set detail=true for bounded metadata and query plans.
+        Without a token only the first 2 variants run; counts describe that bounded plan.
+        Pass 2 to 6 query variants: synonyms, different framings, and ecosystem terms.
         Use short plain terms, without GitHub qualifiers. Set language when the idea
         names one (GitHub's primary language). The server always adds one variant derived
         from the idea; with fewer than 2 of yours it adds more, including a topic search.
@@ -75,6 +78,7 @@ def create_server(discovery: Discovery) -> MCPServer:
                     include_archived,
                     limit,
                     sort_by,
+                    detail,
                 ),
                 discovery.github.token,
             )
@@ -165,8 +169,8 @@ def main() -> None:
     parser.add_argument(
         "--call-timeout",
         type=float,
-        default=15,
-        help="Total seconds per tool call, including pacing and all reads (default 15; 1-120)",
+        default=None,
+        help="Total seconds per tool call (default 30 unauthenticated / 15 with token; 1-120)",
     )
     parser.add_argument(
         "--cache-dir",
@@ -213,7 +217,7 @@ def main() -> None:
         parser.error(str(e))
     if not 1 <= args.port <= 65535 or not 0 <= args.cache_ttl <= 3600:
         parser.error("port must be 1 to 65535 and cache-ttl must be 0 to 3600")
-    if not 1 <= args.call_timeout <= 120:
+    if args.call_timeout is not None and not 1 <= args.call_timeout <= 120:
         parser.error("call-timeout must be 1 to 120 seconds")
     token = os.environ.get(AUTH_ENV, "").strip()
     if token and len(token) < 16:

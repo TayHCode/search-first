@@ -77,7 +77,7 @@ def weight_warnings(weights: RankWeights | OverallWeights) -> list[str]:
     """Keep extreme valid settings, but expose the consequence in every response."""
     values = asdict(weights)
     total = math.fsum(values.values())
-    name = max(values, key=lambda key: values[key])
+    name = max(values, key=(lambda entry: values[entry]))
     share = values[name] / total
     if share >= 0.9:
         return [

@@ -62,7 +62,7 @@ async def test_terminal_constraint_blocks_extension_and_cookie_manager():
         ]
     ).search_existing(
         "a terminal tool to close idle chrome tabs",
-        ["close idle chrome tabs", "chrome tab suspender cli"],
+        ["close idle chrome tabs", "chrome tab sleep cli"],
     )
     assert result["verdict"]["recommendation"] == "inconclusive"
     assert "terminal" in result["verdict"]["reasoning"]
@@ -177,7 +177,7 @@ async def test_extreme_star_weight_is_kept_but_warned():
         ],
         rank_weights=weights,
     ).search_existing(
-        "terminal close idle chrome tabs", ["close idle chrome tabs", "chrome tab suspender cli"]
+        "terminal close idle chrome tabs", ["close idle chrome tabs", "chrome tab sleep cli"]
     )
     assert result["weights"]["rank"]["stars"] == 1
     assert "stars dominates" in result["warnings"][0]

@@ -186,18 +186,20 @@ class DiskCache:
 
 
 class GitHubClient:
-    SEARCH_INTERVAL_UNAUTH = 6.1
-    SEARCH_INTERVAL_AUTH = 2.1
+    SEARCH_VARIANTS_ANONYMOUS = 2
+    SEARCH_VARIANTS_SIGNED_IN = 6
+    SEARCH_SPACING_ANONYMOUS = 6.1
+    SEARCH_SPACING_SIGNED_IN = 2.1
 
     def __init__(
         self,
         token: str | None = None,
         cache: DiskCache | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
-        call_timeout: float = 15,
+        call_timeout: float | None = None,
     ):
-        placeholder = token is not None and token_placeholder(token)
-        self.token = token.strip() if token is not None and not placeholder else None
+        placeholder = False if token is None else token_placeholder(token)
+        self.token = None if placeholder or token is None else token.strip()
         # discover_token has already removed environment placeholders at startup.
         env_placeholder = any(
             name in os.environ and token_placeholder(os.environ[name])
@@ -208,7 +210,8 @@ class GitHubClient:
         )
         self.cache = cache
         self.transport = transport
-        self.call_timeout = call_timeout
+        self.call_timeout = call_timeout if call_timeout is not None else (15 if self.token else 30)
+        self._requests: ContextVar[list[int] | None] = ContextVar("github_requests", default=None)
         self._deadline: ContextVar[float | None] = ContextVar("github_deadline", default=None)
         self._search_lock = asyncio.Lock()
         self._next_search = 0.0
@@ -223,10 +226,13 @@ class GitHubClient:
         marker = self._deadline.set(
             deadline if deadline is not None else time.monotonic() + self.call_timeout
         )
+        count_marker = self._requests.set([0]) if deadline is None else None
         try:
             yield
         finally:
             self._deadline.reset(marker)
+            if count_marker is not None:
+                self._requests.reset(count_marker)
 
     async def get(self, endpoint: str, params: dict[str, Any] | None = None) -> Any:
         deadline = self._deadline.get()
@@ -251,7 +257,9 @@ class GitHubClient:
             delay = self._next_search - time.monotonic()
             if delay > 0:
                 await asyncio.sleep(delay)
-            interval = self.SEARCH_INTERVAL_AUTH if self.token else self.SEARCH_INTERVAL_UNAUTH
+            interval = (
+                self.SEARCH_SPACING_SIGNED_IN if self.token else self.SEARCH_SPACING_ANONYMOUS
+            )
             self._next_search = time.monotonic() + interval
 
     async def _get(self, endpoint: str, params: dict[str, Any] | None = None) -> Any:
@@ -270,7 +278,8 @@ class GitHubClient:
             remaining = self.cooldown.get(resource, 0) - time.time()
             if remaining > 0:
                 raise GitHubError(
-                    "GitHub rate limit: returning partial results; a token raises the limit.",
+                    f"GitHub rate limited; retry in {max(1, math.ceil(remaining))} s; "
+                    "a token raises the limit.",
                     retry_after=max(1, math.ceil(remaining)),
                     status=429,
                 )
@@ -280,10 +289,17 @@ class GitHubClient:
                 remaining = self.cooldown.get(resource, 0) - time.time()
                 if remaining > 0:
                     raise GitHubError(
-                        "GitHub rate limit: returning partial results; a token raises the limit.",
+                        f"GitHub rate limited; retry in {max(1, math.ceil(remaining))} s; "
+                        "a token raises the limit.",
                         retry_after=max(1, math.ceil(remaining)),
                         status=429,
                     )
+            budget = 36 if self.token else 6
+            counter = self._requests.get()
+            if counter is not None and counter[0] >= budget:
+                raise GitHubError("Request budget exhausted; retry later or set GITHUB_TOKEN.")
+            if counter is not None:
+                counter[0] += 1
             headers = {
                 "Accept": "application/vnd.github+json",
                 "X-GitHub-Api-Version": "2022-11-28",
@@ -295,11 +311,15 @@ class GitHubClient:
                 async with httpx.AsyncClient(
                     base_url=API,
                     headers=headers,
-                    timeout=20,
+                    timeout=httpx.Timeout(20, connect=2.5),
                     transport=self.transport,
                     follow_redirects=False,
                 ) as client:
                     response = await client.get(endpoint, params=params)
+            except (httpx.ConnectTimeout, httpx.ConnectError, httpx.ProxyError):
+                raise GitHubError(
+                    "GitHub unreachable from this machine: check network/proxy and retry."
+                ) from None
             except httpx.TimeoutException:
                 raise GitHubError(
                     "GitHub request timed out (20s); returning partial results. Retry later.",
@@ -337,8 +357,8 @@ class GitHubClient:
                     delay = max(1, min(delay, 3600))
                     self.cooldown[resource] = time.time() + delay
                     raise GitHubError(
-                        "GitHub rate limit reached; returning partial results. "
-                        "Retry after retry_after_seconds; a token raises the repository-search "
+                        f"GitHub rate limited; retry in {delay} s; "
+                        "a token raises the repository-search "
                         "limit from about 10 to 30 requests/minute (shared quotas still apply).",
                         retry_after=delay,
                         status=response.status_code,

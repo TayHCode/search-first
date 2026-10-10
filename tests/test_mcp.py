@@ -32,7 +32,7 @@ async def test_official_client_tool_contract_and_recorded_call(recorded_transpor
             "compare_candidates",
         }
         search = next(t for t in listing.tools if t.name == "search_existing")
-        assert "3 to 6" in search.description
+        assert "2 to 6" in search.description
         assert search.annotations.read_only_hint
         assert "idea" in search.input_schema["required"]
         result = await client.call_tool("search_existing", {"idea": IDEA, "queries": QUERIES})

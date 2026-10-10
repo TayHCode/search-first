@@ -133,7 +133,7 @@ async def test_network_failure_is_clear():
     def handler(request):
         raise httpx.ConnectError("may contain credentials", request=request)
 
-    with pytest.raises(GitHubError, match="network request failed"):
+    with pytest.raises(GitHubError, match="unreachable from this machine"):
         await GitHubClient(transport=httpx.MockTransport(handler)).get("/repos/example/repo")
 
 
@@ -191,8 +191,8 @@ async def test_search_pacing_does_not_charge_cached_or_core_reads(
 
     monkeypatch.setattr(time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(asyncio, "sleep", sleep)
-    monkeypatch.setattr(GitHubClient, "SEARCH_INTERVAL_UNAUTH", 6.1)
-    monkeypatch.setattr(GitHubClient, "SEARCH_INTERVAL_AUTH", 2.1)
+    monkeypatch.setattr(GitHubClient, "SEARCH_SPACING_ANONYMOUS", 6.1)
+    monkeypatch.setattr(GitHubClient, "SEARCH_SPACING_SIGNED_IN", 2.1)
     client = GitHubClient(
         "fixture-" + "credential" if authenticated else None,
         DiskCache(tmp_path),
@@ -224,7 +224,7 @@ async def test_successful_last_quota_read_prevents_next_network_request():
 
     client = GitHubClient(transport=httpx.MockTransport(handler))
     await client.get("/search/repositories")
-    with pytest.raises(GitHubError, match="partial results") as exc:
+    with pytest.raises(GitHubError, match="rate limited") as exc:
         await client.get("/search/repositories")
     assert exc.value.retry_after >= 1
     assert client.rate_limits["search"]["limit"] == 30
@@ -246,7 +246,7 @@ async def test_rate_limit_reset_and_secondary_backoff():
         with pytest.raises(GitHubError) as exc:
             await client.get("/search/repositories")
         assert 1 <= exc.value.retry_after <= expected
-        assert "partial results" in str(exc.value)
+        assert "rate limited" in str(exc.value)
 
 
 async def test_http_timeout_is_clear_and_does_not_echo_transport_details():
@@ -290,5 +290,5 @@ async def test_cached_response_answers_offline_until_ttl(monkeypatch, tmp_path):
     online[0] = False
     assert await client.get("/search/repositories", {"q": "example"}) == expected
     clock[0] += 6
-    with pytest.raises(GitHubError, match="network request failed"):
+    with pytest.raises(GitHubError, match="unreachable from this machine"):
         await client.get("/search/repositories", {"q": "example"})
