@@ -12,12 +12,14 @@ from .github import GitHubClient, GitHubError
 from .ranking import (
     STOP,
     days_since,
+    explain_ties,
     maintenance,
     popularity_score,
     pull_request_activity,
     rank_repo,
     relevance_key,
     repo_summary,
+    specific_idea,
     verdict,
 )
 from .weights import (
@@ -173,6 +175,7 @@ class Discovery:
         matches: dict[str, list[dict[str, Any]]] = {}
         errors: list[dict[str, Any]] = []
         truncated = False
+        incomplete = False
         for variant in plan:
             variant["query"] += suffix
             variant["status"] = "skipped"
@@ -186,6 +189,7 @@ class Discovery:
                     },
                 )
                 truncated |= bool(data.get("incomplete_results")) or data.get("total_count", 0) > 30
+                incomplete |= bool(data.get("incomplete_results"))
                 variant["total_count"] = int(data.get("total_count", 0))
                 variant["status"] = "completed"
                 for index, repo in enumerate(data.get("items", []), 1):
@@ -201,7 +205,12 @@ class Discovery:
             except GitHubError as e:
                 variant["status"] = "failed"
                 errors.append({"query": variant["query"], **e.as_dict()})
-                if e.retry_after or e.status in (401, 403, 408):
+                if (
+                    e.retry_after
+                    or e.status is None
+                    or e.status in (401, 403, 408, 429)
+                    or e.status >= 500
+                ):
                     break  # Stop politely; don't hammer remaining variants with the same error.
         ranked = sorted(
             [
@@ -210,14 +219,22 @@ class Discovery:
             ],
             key=relevance_key,
         )
-        verdict_data = verdict(ranked, complete=not errors, idea=idea)
+        explain_ties(ranked)
+        evaluated = len(ranked)
+        completed = sum(q["status"] == "completed" for q in plan)
+        verdict_data = verdict(ranked, complete=not errors and not incomplete, idea=idea)
         warnings = weight_warnings(self.rank_weights)
         if warnings:
             if verdict_data["recommendation"] == "build from scratch":
                 verdict_data["recommendation"] = "inconclusive"
             verdict_data["reasoning"] += " " + " ".join(warnings)
         skipped = sum(q["status"] == "skipped" for q in plan)
+        if not specific_idea(idea):
+            warnings.append("Candidates omitted: vague idea has no reliable behavioral match.")
+            ranked = []
         omitted = max(0, len(ranked) - limit)
+        if not ranked and evaluated:
+            omitted = evaluated
         retry = max((e["retry_after_seconds"] or 0 for e in errors), default=0)
         message = "Partial results: " + errors[-1]["message"] if errors else None
         if retry:
@@ -228,6 +245,28 @@ class Discovery:
                 f"Retry in {retry} seconds. A token raises the repository-search limit from "
                 "about 10 to 30 requests/minute; users sharing an IP/account share quota."
             )
+        if not completed:
+            # Only the discovery layer knows whether any query actually completed.
+            # Never call an all-failed search partial, including nested error text.
+            for error in errors:
+                error["message"] = (
+                    error["message"]
+                    .replace("returning partial results. ", "")
+                    .replace("returning partial results; ", "")
+                )
+            cause = errors[-1]["message"]
+            message = (
+                "No search completed: GitHub unreachable/rate limited; nothing to show. " + cause
+            )
+            if retry:
+                message += (
+                    f" Retry in {retry} seconds. A token raises the repository-search limit; "
+                    "results from failed/skipped queries are unknown."
+                )
+        elif incomplete and not errors:
+            message = "GitHub reported incomplete results. Narrow the queries and retry."
+        if errors or incomplete:
+            verdict_data["reasoning"] += " " + (message or "Retry the incomplete search.")
         # Re-order the returned rows only; the verdict always uses relevance order.
         if sort_by == "stars":
             ranked.sort(key=lambda r: (not r["plausible"], -r["stars"], r["name"]))
@@ -246,7 +285,7 @@ class Discovery:
             "weights": {"rank": weights_dict(self.rank_weights)},
             "warnings": warnings + self.github.auth_warnings,
             "candidates": ranked[:limit],
-            "unique_candidates_evaluated": len(ranked),
+            "unique_candidates_evaluated": evaluated,
             "queries": plan,
             "errors": errors,
             "message": message,
@@ -255,7 +294,7 @@ class Discovery:
                 "bounded": True,
                 "truncated": truncated,
                 "repositories_per_query": 30,
-                "queries_completed": sum(q["status"] == "completed" for q in plan),
+                "queries_completed": completed,
                 "queries_failed": len(errors),
                 "queries_skipped": skipped,
                 "results_skipped": omitted,

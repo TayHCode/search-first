@@ -194,7 +194,7 @@ class GitHubClient:
         token: str | None = None,
         cache: DiskCache | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
-        call_timeout: float = 45,
+        call_timeout: float = 15,
     ):
         placeholder = token is not None and token_placeholder(token)
         self.token = token.strip() if token is not None and not placeholder else None

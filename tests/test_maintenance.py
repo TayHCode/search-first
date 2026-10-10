@@ -202,7 +202,8 @@ def test_language_mismatch_is_penalized_and_language_counts_as_a_term():
     assert any("language" in c for c in [other["why_it_matched"]])
 
 
-async def test_compare_can_recommend_use_as_is():
+@pytest.mark.parametrize("readme_available", [True, False])
+async def test_compare_can_recommend_use_as_is_only_with_complete_reads(readme_available):
     def meta(name: str) -> dict[str, object]:
         return {
             "full_name": name,
@@ -225,7 +226,11 @@ async def test_compare_can_recommend_use_as_is():
         if request.url.path.endswith(("/pulls", "/releases")):
             return httpx.Response(200, json=[])
         if request.url.path.endswith("/readme"):
-            return httpx.Response(404)
+            return (
+                httpx.Response(200, json={"text": "Install and test the idle tab closer."})
+                if readme_available
+                else httpx.Response(404)
+            )
         return httpx.Response(200, json=meta("example/idle-tabs"))
 
     discovery = Discovery(GitHubClient(transport=httpx.MockTransport(handler)), NOW)
@@ -234,7 +239,10 @@ async def test_compare_can_recommend_use_as_is():
         ["example/idle-tabs", "Example/Idle-Tabs"],
     )
     assert len(result["rows"]) == 1
-    assert result["verdict"]["recommendation"] == "use as is"
+    assert result["verdict"]["recommendation"] == (
+        "use as is" if readme_available else "inconclusive"
+    )
+    assert result["verdict"]["search_complete"] is readme_available
 
 
 def test_no_pr_history_does_not_penalize_solo_projects():

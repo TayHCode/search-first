@@ -9,6 +9,8 @@ only after a broader search fails to find a suitable base.
 
 Version 0.1, MIT licensed. It is not yet published as a package or a hosted service,
 and the project and distribution (`search-first-mcp`) names may still change.
+The source clone URL below is the intended public destination; it cannot supply
+this unpublished revision. Use a supplied local checkout until source publication.
 
 **Use a GitHub token for regular use.** Without one, the 10 search requests/minute
 per public IP usually buy only **about 2 idea queries/minute**, and fewer when other
@@ -107,7 +109,8 @@ the CLI fallback is off by default. Credentials are never included in tool respo
 logs or cache files. Prefer inherited environment or a secret manager; keep any
 credential-bearing client configuration untracked. Empty values, unexpanded
 `${VAR}`, `$VAR` or `%VAR%` references and example values such as `your-token-here`
-are ignored. If no usable token remains, each tool response says once:
+are ignored. If no usable token remains, each successful tool response includes
+this note once in `warnings` (the `message` field is used for failures):
 `token placeholder not expanded; running unauthenticated`. A real but invalid
 credential still returns an authentication error; it is not silently ignored.
 
@@ -135,15 +138,23 @@ variants to conserve quota.
 
 Uncached search requests are paced at least 6.1 seconds apart without a token,
 or 2.1 seconds with one. GitHub quota/reset and `Retry-After` headers trigger a
-cooldown; the server returns **partial results**, a clear error and
-`retry_after_seconds` rather than waiting a full rate-limit window. The response
+cooldown; when at least one query completed, the server returns **partial results**
+and `retry_after_seconds` rather than waiting a full rate-limit window. If zero
+queries completed, MCP returns an actual tool error: **No search completed:
+GitHub unreachable/rate limited; nothing to show**, with the cause and retry hint.
+A network failure stops the remaining variants immediately. The response
 reports completed, failed and skipped query counts, how many retrieved results the
 result limit omitted, and retry seconds, and reminds you that a token raises the
 limit. Results from queries that could not run are unknown, not fabricated counts.
-Retry the idea after that interval. A total **45-second deadline per tool call** includes all variants,
-inspections, queueing and pacing; individual requests are also bounded at 20 seconds.
-Use `--call-timeout SECONDS` (1–120) to change the total. Timeout results are
-incomplete: narrow the query and retry; never treat them as proof that nothing exists.
+Retry the idea after that interval. A total **15-second deadline per tool call**
+includes all variants, inspections, queueing and pacing; each request uses the
+remaining budget, capped at 20 seconds. Use `--call-timeout SECONDS` (1–120) to
+change the total. Without a token, four uncached variants need over 18 seconds
+just for pacing: use a token, cached queries, or a longer explicit timeout to
+complete that plan. Timeout and GitHub-incomplete results always yield
+`inconclusive`, even with an excellent retrieved match. Retry before choosing to
+use, fork, borrow or build. A bounded sample with more than 30 matches per query
+is truncated, but is not itself a failed or GitHub-incomplete search.
 
 Token creation is described above. For Claude Code, use the explicit `-e` command
 in the client section or inherit `GITHUB_TOKEN` from the launching environment.
@@ -158,9 +169,10 @@ Only public repositories are returned; inspecting private metadata is refused.
 GitHub receives your search terms. Do not include confidential requirements or secrets.
 Cache defaults to `$XDG_CACHE_HOME/search-first` (or `~/.cache/search-first`) for
 five minutes; `--cache-dir PATH` changes it and `--cache-ttl 0` disables it.
-Queries already cached within that TTL can answer **offline**; uncached endpoints
-still need network access. On Windows the cache is memory-only for the running
-server's lifetime because POSIX ownership/mode checks are unavailable. The
+Queries already cached within that TTL can answer **offline**, on Windows only
+within the same running server process (its cache is memory-only). Uncached
+endpoints still need network access. Windows lacks the POSIX ownership/mode
+checks used for the disk cache. The
 cache directory is created with mode 0700 and cache files are written 0600; an existing
 directory that you do not own, or that others can write to, is not used. Cache entries contain public response data, not authentication headers. Known credentials
 and recognizable GitHub tokens are scrubbed, including decoded README text. Expired
@@ -336,7 +348,8 @@ PowerShell uses `-e "GITHUB_TOKEN=$env:GITHUB_TOKEN"` instead. Run one registrat
 command, not both. With no token, use the first command without `-e`; omit the token
 key rather than inserting an environment reference or example value.
 
-This writes `.mcp.json` in that project. Project-scoped servers need approval:
+This writes `.mcp.json` in that project; Claude Code may include an empty
+`"env": {}` even when no `-e` was passed. Project-scoped servers need approval:
 start **interactive** `claude` in the project, approve the server when prompted,
 and use `/mcp` to inspect its status. Server approval and permission to call tools
 are separate. A healthy server alone does not grant headless tool permission.
@@ -500,8 +513,16 @@ credible matches sort before tiny matches and partial matches, regardless of raw
 weighted score. `core_terms`, `missing_key_terms`, `missing_constraints`,
 `reuse_floor_met` and the one-line `why_it_matched` explain the decision. All reuse
 verdicts remain provisional; recent pushes and stars are weak maintenance signals.
-Generic aspirations ("life easier", "computer faster") yield `inconclusive`, even
-with popular hits. The server always runs one derived whole-idea variant. If you
+Within equal relevance scores and fit groups, ties resolve by metadata maintenance
+score (a low-confidence push-age heuristic), stars, normalized idea-term coverage
+in name/description/topics, push recency, then repository name. `tie_break` and
+`why_it_matched` say **tied with N others** and why the winner won, counting the
+full retrieved group before the result limit. CLI/terminal or command-line wording
+in descriptions or topics verifies an interface constraint; Python alone does not.
+If every candidate in the top relevance group lacks that evidence, the verdict
+says none of these is a terminal tool according to retrieved metadata; inspect before inferring support.
+Generic aspirations ("life easier", "computer faster") yield `inconclusive` and
+omit unrelated candidate rows, even with popular hits. The server always runs one derived whole-idea variant. If you
 pass two or more variants it skips extra derived variants to save search quota.
 
 Candidates below that threshold with at least two matched idea terms, 25% coverage

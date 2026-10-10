@@ -191,7 +191,7 @@ def is_adjacent(row: dict[str, Any]) -> bool:
     )
 
 
-def relevance_key(row: dict[str, Any]) -> tuple[Any, ...]:
+def relevance_group(row: dict[str, Any]) -> tuple[Any, ...]:
     # Apply the same plausibility grouping in all presentation orders.
     return (
         not row["plausible"],
@@ -199,9 +199,58 @@ def relevance_key(row: dict[str, Any]) -> tuple[Any, ...]:
         bool(row.get("missing_constraints")),
         not is_adjacent(row),
         -row["relevance_score"],
+    )
+
+
+def tie_key(row: dict[str, Any]) -> tuple[Any, ...]:
+    health = row.get("maintenance") or row.get("metadata_maintenance", {})
+    pushed = parse_time(row.get("last_push"))
+    return (
+        -(health.get("score") or 0),
         -row["stars"],
+        -row.get("metadata_term_coverage", 0),
+        -pushed.timestamp() if pushed else math.inf,
+        row["name"].casefold(),
         row["name"],
     )
+
+
+def relevance_key(row: dict[str, Any]) -> tuple[Any, ...]:
+    return (*relevance_group(row), *tie_key(row))
+
+
+def explain_ties(ranked: list[dict[str, Any]]) -> None:
+    """Annotate equal relevance groups, including peers outside the returned row limit."""
+    groups: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+    for row in ranked:
+        groups.setdefault(relevance_group(row), []).append(row)
+    criteria = (
+        "higher maintenance score",
+        "more stars",
+        "greater term coverage in name/description/topics",
+        "more recent push",
+        "alphabetical repository name",
+        "repository name spelling",
+    )
+    for peers in groups.values():
+        if len(peers) < 2:
+            continue
+        winner, runner_up = sorted(peers, key=tie_key)[:2]
+        criterion = next(
+            (
+                label
+                for a, b, label in zip(tie_key(winner), tie_key(runner_up), criteria, strict=True)
+                if a != b
+            ),
+            "identical metadata",
+        )
+        explanation = (
+            f"tied with {len(peers) - 1} others at {winner['relevance_score']:.3f}; "
+            f"{winner['name']} wins by {criterion}."
+        )
+        for row in peers:
+            row["tie_break"] = explanation
+            row["why_it_matched"] += " " + explanation
 
 
 def mentioned_languages(idea: str) -> set[str]:
@@ -366,14 +415,14 @@ def rank_repo(
     weights: RankWeights = DEFAULT_RANK,
 ) -> dict[str, Any]:
     result = repo_summary(repo)
-    text = " ".join(
+    metadata_text = " ".join(
         [
             result["name"].split("/")[-1],
             result["description"] or "",
             " ".join(result["topics"]),
-            result["language"] or "",
         ]
     )
+    text = metadata_text + " " + (result["language"] or "")
     idea_terms, repo_terms = key_terms(idea), set(tokens(text))
     matched = sorted(idea_terms & repo_terms)
     coverage = len(matched) / max(1, len(idea_terms))
@@ -446,6 +495,10 @@ def rank_repo(
             "relevance_score": round(max(0, min(1, score)), 3),
             "days_since_push": age,
             "idea_term_coverage": round(coverage, 3),
+            "metadata_term_coverage": round(
+                len(set(tokens(idea)) & set(tokens(metadata_text))) / max(1, len(tokens(idea))), 3
+            ),
+            "metadata_maintenance": maintenance(result, None, None, None, now),
             "core_terms": sorted(idea_terms),
             "core_match": "strong"
             if specific and not missing_keys
@@ -494,7 +547,16 @@ def verdict(
     vague = (idea is not None and not specific_idea(idea)) or bool(
         ranked and not ranked[0].get("idea_is_specific", True)
     )
-    if vague:
+    if not complete:
+        recommendation = "inconclusive"
+        reasoning = (
+            "Search evidence is incomplete. Retry failed/skipped queries or incomplete reads "
+            "before choosing to use, fork, borrow or build; retrieved candidates are only leads."
+        )
+        if vague:
+            closest = None
+            reasoning += " Name a concrete behavior, domain and must-have constraints."
+    elif vague:
         closest = None
         recommendation = "inconclusive"
         reasoning = (
@@ -551,8 +613,12 @@ def verdict(
             "All core terms and explicit constraints are covered, with at least 25 stars, "
             "a push within 365 days and a recognized license. Inspect and test before forking."
         )
-    if not complete:
-        reasoning += " Evidence is incomplete; retry failed reads before making a decision."
+    best = [r for r in ranked if relevance_group(r) == relevance_group(ranked[0])]
+    if best and all("terminal" in r.get("missing_constraints", []) for r in best):
+        reasoning += " None of these is a terminal tool according to retrieved metadata "
+        reasoning += "in the top relevance group; terminal/CLI support is unverified."
+    if closest and closest.get("tie_break"):
+        reasoning += " " + closest["tie_break"]
     return {
         "closest_match": {"name": closest["name"], "url": closest["url"]} if closest else None,
         "plausible_candidates": len(plausible),

@@ -66,7 +66,7 @@ def create_server(discovery: Discovery) -> MCPServer:
         sort_by orders returned rows: relevance (default), stars, or recent_activity.
         """
         try:
-            return sanitize(
+            result = sanitize(
                 await discovery.search_existing(
                     idea,
                     queries,
@@ -78,6 +78,9 @@ def create_server(discovery: Discovery) -> MCPServer:
                 ),
                 discovery.github.token,
             )
+            if result["coverage"]["queries_completed"] == 0:
+                raise ToolError(str(result["message"]))
+            return result
         except (ValueError, GitHubError) as e:
             raise ToolError(error_message(e)) from None
 
@@ -162,8 +165,8 @@ def main() -> None:
     parser.add_argument(
         "--call-timeout",
         type=float,
-        default=45,
-        help="Total seconds per tool call, including pacing and all reads (default 45; 1-120)",
+        default=15,
+        help="Total seconds per tool call, including pacing and all reads (default 15; 1-120)",
     )
     parser.add_argument(
         "--cache-dir",
