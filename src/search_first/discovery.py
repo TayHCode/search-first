@@ -523,7 +523,7 @@ class Discovery:
         seen: dict[str, str] = {}
         for repo in repos:
             name = parse_repo(repo)
-            seen.setdefault(name.casefold(), name)  # dedupe case-insensitively, keep spelling
+            seen.setdefault(name.casefold(), name)
         names = list(seen.values())
         rows, errors = [], []
         for name in names:

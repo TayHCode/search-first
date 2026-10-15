@@ -199,7 +199,7 @@ async def test_search_pacing_does_not_charge_cached_or_core_reads(
         httpx.MockTransport(lambda _: httpx.Response(200, json={"items": []})),
     )
     await client.get("/search/repositories", {"q": "first"})
-    await client.get("/search/repositories", {"q": "first"})  # cache hit
+    await client.get("/search/repositories", {"q": "first"})
     await client.get("/repos/example/repo")  # core reads do not spend search quota
     await client.get("/search/repositories", {"q": "second"})
     assert waits == pytest.approx([interval])
